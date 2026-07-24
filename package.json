@@ -1,6 +1,6 @@
 {
   "name": "pinacoteca",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "board para ver todos os HTMLs de uma pasta lado a lado, com recarga automatica",
   "type": "module",
   "license": "MIT",
