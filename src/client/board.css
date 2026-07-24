@@ -181,17 +181,25 @@ body {
   gap: 8px;
   padding: 0 2px 8px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 18px;
+  font-weight: 600;
+  /* 28px de linha + 8px de padding = CARD_TITLE_HEIGHT no board.js. */
+  line-height: 28px;
 }
 
 .card.is-interactive .card-title {
   color: var(--accent);
 }
 
+/*
+ * A altura vem do inline style, medida do conteudo real do iframe.
+ * Nao usar `flex: 1` aqui: `flex-basis: 0%` num card de altura automatica
+ * anula essa altura e o frame colapsa para os 150px padrao do iframe.
+ */
 .card-frame {
   position: relative;
   overflow: hidden;
-  flex: 1;
+  flex: 0 0 auto;
   border-radius: 8px;
   background: var(--card-bg);
   box-shadow: 0 8px 32px rgb(0 0 0 / 45%);

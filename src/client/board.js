@@ -1,7 +1,8 @@
 // Board da pinacoteca: monta os cards, controla zoom/pan e aplica os eventos do servidor.
 
-const CARD_WIDTH = 1280;      // viewport de referencia de cada prototipo
-const CARD_TITLE_HEIGHT = 28; // altura do rotulo acima do frame
+const CARD_WIDTH = 1280;      // largura maxima / viewport de referencia de cada prototipo
+const MIN_FRAME_WIDTH = 200;
+const CARD_TITLE_HEIGHT = 36; // altura do rotulo acima do frame (linha 28px + 8px de padding)
 const DEFAULT_FRAME_HEIGHT = 800;
 const MIN_FRAME_HEIGHT = 400;
 const MAX_FRAME_HEIGHT = 3200;
@@ -69,7 +70,7 @@ function contentBounds() {
   let maxX = 0;
   let maxY = 0;
   for (const screen of screens.values()) {
-    maxX = Math.max(maxX, screen.x + CARD_WIDTH);
+    maxX = Math.max(maxX, screen.x + screen.frameWidth);
     maxY = Math.max(maxY, screen.y + CARD_TITLE_HEIGHT + screen.frameHeight);
   }
   return { width: maxX, height: maxY };
@@ -102,11 +103,11 @@ function centerOn(file) {
 
   // Enquadra o card inteiro, sem passar de 100%.
   scale = clamp(
-    Math.min((available.width - 96) / CARD_WIDTH, (available.height - 96) / cardHeight),
+    Math.min((available.width - 96) / screen.frameWidth, (available.height - 96) / cardHeight),
     MIN_SCALE,
     1,
   );
-  translateX = available.width / 2 - (screen.x + CARD_WIDTH / 2) * scale;
+  translateX = available.width / 2 - (screen.x + screen.frameWidth / 2) * scale;
   translateY = available.height / 2 - (screen.y + cardHeight / 2) * scale;
 
   applyTransform();
@@ -127,6 +128,11 @@ function layout() {
   const columns = Math.max(1, Math.ceil(Math.sqrt(files.length)));
   const columnHeights = new Array(columns).fill(0);
 
+  // Coluna dimensionada ao card mais largo: cards estreitos (mobile) ficam
+  // encostados em vez de espalhados por slots de 1280px.
+  let columnWidth = MIN_FRAME_WIDTH;
+  for (const screen of screens.values()) columnWidth = Math.max(columnWidth, screen.frameWidth);
+
   for (const file of files) {
     const screen = screens.get(file);
     let target = 0;
@@ -134,7 +140,7 @@ function layout() {
       if (columnHeights[i] < columnHeights[target]) target = i;
     }
 
-    screen.x = target * (CARD_WIDTH + GAP);
+    screen.x = target * (columnWidth + GAP);
     screen.y = columnHeights[target];
     screen.card.style.left = `${screen.x}px`;
     screen.card.style.top = `${screen.y}px`;
@@ -152,6 +158,30 @@ function measureFrameHeight(iframe) {
     if (!doc) return null;
     const height = Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0);
     return height > 0 ? clamp(height, MIN_FRAME_HEIGHT, MAX_FRAME_HEIGHT) : null;
+  } catch {
+    return null;
+  }
+}
+
+/*
+ * Largura real da tela, para o card nao ficar bem mais largo que o prototipo.
+ * A caixa que envolve os elementos do topo do body da a largura tida, mesmo
+ * quando o conteudo esta centralizado numa viewport larga: pega o direito do
+ * elemento mais a direita e ignora a margem vazia dos lados.
+ */
+function measureFrameWidth(iframe) {
+  try {
+    const doc = iframe.contentDocument;
+    const body = doc?.body;
+    if (!body) return null;
+
+    let right = 0;
+    for (const el of body.children) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0) right = Math.max(right, rect.right);
+    }
+    if (right <= 0) return null;
+    return clamp(Math.ceil(right), MIN_FRAME_WIDTH, CARD_WIDTH);
   } catch {
     return null;
   }
@@ -187,7 +217,7 @@ function collectAssets(screen, into = new Set()) {
 function createCard(file) {
   const card = document.createElement('article');
   card.className = 'card';
-  card.style.width = `${CARD_WIDTH}px`;
+  card.style.width = `${CARD_WIDTH}px`; // largura inicial; ajustada ao conteudo no load
 
   const title = document.createElement('header');
   title.className = 'card-title';
@@ -225,7 +255,7 @@ function createCard(file) {
 
   const screen = {
     file, card, frame, iframe, item, assets: new Set(),
-    frameHeight: DEFAULT_FRAME_HEIGHT, x: 0, y: 0,
+    frameWidth: CARD_WIDTH, frameHeight: DEFAULT_FRAME_HEIGHT, x: 0, y: 0,
   };
 
   iframe.addEventListener('load', () => {
@@ -242,12 +272,25 @@ function createCard(file) {
       screen.pendingScroll = 0;
     }
 
+    let dirty = false;
+
+    // Largura primeiro: encolher o card reflui o conteudo, e a altura tem de
+    // ser medida ja com essa largura para nao ficar desatualizada.
+    const width = measureFrameWidth(iframe);
+    if (width && Math.abs(width - screen.frameWidth) > 1) {
+      screen.frameWidth = width;
+      screen.card.style.width = `${width}px`;
+      dirty = true;
+    }
+
     const measured = measureFrameHeight(iframe);
     if (measured && Math.abs(measured - screen.frameHeight) > 1) {
       screen.frameHeight = measured;
       screen.frame.style.height = `${measured}px`;
-      layout();
+      dirty = true;
     }
+
+    if (dirty) layout();
   });
 
   screens.set(file, screen);
@@ -329,6 +372,9 @@ let panStartY = 0;
 viewport.addEventListener('pointerdown', (event) => {
   if (event.button !== 0 && event.button !== 1) return;
   if (interactiveFile && event.target.closest?.('.card.is-interactive')) return;
+  // A toolbar fica dentro do viewport: sem isso o setPointerCapture abaixo
+  // redirecionaria o clique para o viewport e os botoes nunca disparariam.
+  if (event.target.closest?.('.toolbar')) return;
 
   panPointerId = event.pointerId;
   panStartX = event.clientX - translateX;

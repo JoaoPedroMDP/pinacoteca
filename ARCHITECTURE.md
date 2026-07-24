@@ -129,25 +129,42 @@ eventos por arquivo antes de mandá-los ao cliente.
 - **Map de assets** — `tela → recursos carregados`, lido de cada iframe a cada `load`.
   Um evento `asset` recarrega apenas as telas cujo conjunto contém aquele arquivo.
 
-Cada `iframe` tem largura fixa (1280px, referência de desktop) para que os cards tenham
-tamanho previsível no board. A altura **não** é fixa: no `load` de cada iframe o conteúdo
-real é medido (`scrollHeight`, possível porque tudo é mesma origem) e o card se ajusta,
-limitado a 400–3200px. Sem isso, uma landing page longa apareceria cortada dentro de uma
-janelinha, que é o oposto do que se quer ver num board.
+Cada `iframe` começa com 1280px (referência de desktop), mas nem largura nem altura ficam
+fixas: no `load` de cada iframe o conteúdo real é medido (possível porque tudo é mesma
+origem) e o card se ajusta.
+
+A **largura** é a borda direita do elemento mais à direita do `body` — a caixa que envolve
+os elementos, não o `scrollWidth`. Assim uma tela mobile centralizada numa viewport larga
+resulta num card do tamanho da tela, e não num card de 1280px com faixas vazias dos lados.
+Fica limitada a 200–1280px. A medição vem primeiro, porque encolher o card reflui o
+conteúdo e a altura precisa ser lida já com a largura final.
+
+A **altura** é medida por `scrollHeight`, limitada a 400–3200px. Sem isso, uma landing page
+longa apareceria cortada dentro de uma janelinha, que é o oposto do que se quer ver num board.
+
+Essa altura é aplicada como `height` inline no `.card-frame`, e o frame precisa ficar com
+`flex: 0 0 auto`. Com `flex: 1` o `flex-basis: 0%` vence a altura inline num card de altura
+automática, e o frame colapsa para os 150px padrão de um `iframe` — todas as telas ficariam
+cortadas logo abaixo do topo.
 
 O zoom é aplicado via `transform: scale()` no container do board, não redimensionando os
 iframes — assim o conteúdo não sofre reflow ao dar zoom, e o resultado é o comportamento
 de canvas que se espera.
 
 Os cards são distribuídos em colunas (`⌈√n⌉`), cada um indo para a coluna mais curta no
-momento. O layout é recalculado quando um card muda de altura ou quando uma tela entra ou
-sai.
+momento. A largura da coluna é a do card mais largo do board, para que telas estreitas
+fiquem encostadas em vez de espalhadas por slots de 1280px. O layout é recalculado quando
+um card muda de largura ou altura, ou quando uma tela entra ou sai.
 
 #### Escudo sobre o iframe
 
 Um iframe engole scroll e arrasto: sem tratamento, passar o mouse sobre um card mataria o
 pan e o zoom do board. Por isso cada card tem uma `div` transparente por cima, e o board
 fica com todos os eventos.
+
+O pan usa `setPointerCapture` no viewport. Como a toolbar de zoom mora dentro do viewport,
+o `pointerdown` ignora alvos dentro de `.toolbar` — senão a captura redirecionaria o
+`click` para o viewport e os botões de zoom nunca disparariam.
 
 Duplo clique num card libera aquele card específico — o escudo some e o protótipo passa a
 receber cliques, para preencher formulário e navegar. `Esc` ou um clique fora devolve o

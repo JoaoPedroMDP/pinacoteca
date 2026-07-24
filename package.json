@@ -17,6 +17,14 @@
     "static",
     "viewer"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JoaoPedroMDP/pinacoteca.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JoaoPedroMDP/pinacoteca/issues"
+  },
+  "homepage": "https://github.com/JoaoPedroMDP/pinacoteca#readme",
   "bin": {
     "pinacoteca": "bin/pinacoteca.js"
   },
