@@ -18,6 +18,7 @@ const screenList = document.getElementById('screen-list');
 const screenCount = document.getElementById('screen-count');
 const rootPath = document.getElementById('root-path');
 const connection = document.getElementById('connection');
+const version = document.getElementById('version');
 const zoomLabel = document.getElementById('zoom-label');
 const emptyState = document.getElementById('empty-state');
 
@@ -165,9 +166,10 @@ function measureFrameHeight(iframe) {
 
 /*
  * Largura real da tela, para o card nao ficar bem mais largo que o prototipo.
- * A caixa que envolve os elementos do topo do body da a largura tida, mesmo
- * quando o conteudo esta centralizado numa viewport larga: pega o direito do
- * elemento mais a direita e ignora a margem vazia dos lados.
+ * E a caixa tida em volta dos elementos do topo do body (direita menos esquerda),
+ * nao so a borda direita: um prototipo mobile centralizado numa viewport de 1280px
+ * tem margem vazia dos dois lados, e so a diferenca da a largura da tela em si.
+ * Como encolher o card reflui e recentra o conteudo, a margem some na proxima carga.
  */
 function measureFrameWidth(iframe) {
   try {
@@ -175,13 +177,16 @@ function measureFrameWidth(iframe) {
     const body = doc?.body;
     if (!body) return null;
 
+    let left = Infinity;
     let right = 0;
     for (const el of body.children) {
       const rect = el.getBoundingClientRect();
-      if (rect.width > 0) right = Math.max(right, rect.right);
+      if (rect.width <= 0) continue;
+      left = Math.min(left, rect.left);
+      right = Math.max(right, rect.right);
     }
-    if (right <= 0) return null;
-    return clamp(Math.ceil(right), MIN_FRAME_WIDTH, CARD_WIDTH);
+    if (right <= left) return null;
+    return clamp(Math.ceil(right - left), MIN_FRAME_WIDTH, CARD_WIDTH);
   } catch {
     return null;
   }
@@ -430,6 +435,7 @@ async function loadScreens() {
 
   rootPath.textContent = data.root;
   rootPath.title = data.root;
+  if (data.version) version.textContent = `v${data.version}`;
 
   for (const file of data.screens) createCard(file);
   renderSidebar();

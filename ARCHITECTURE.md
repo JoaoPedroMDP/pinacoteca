@@ -101,7 +101,7 @@ desenvolvimento, onde sempre há algo escutando em porta redonda.
 | Observar mudanças | `chokidar` sobre a pasta, **todos os arquivos** — HTML vira tela, o resto vira asset em potencial |
 | Servir os protótipos | `GET /preview/*` devolve o arquivo cru — HTML e também os assets que ele referencia — com `Cache-Control: no-store` |
 | Servir o board | `GET /` devolve a aplicação; `GET /app/*` devolve o CSS e o JS dela |
-| Listar telas | `GET /api/screens` devolve os arquivos encontrados |
+| Listar telas | `GET /api/screens` devolve os arquivos encontrados, a raiz e a versão do pacote |
 | Empurrar eventos | `GET /events` é o stream SSE |
 
 Eventos SSE emitidos:
@@ -123,7 +123,9 @@ eventos por arquivo antes de mandá-los ao cliente.
 
 ### Cliente (board)
 
-- **Sidebar** — lista as telas. Clicar centraliza o board naquele card.
+- **Sidebar** — lista as telas. Clicar centraliza o board naquele card. O rodapé mostra a
+  raiz observada e, embaixo, o estado da conexão SSE à esquerda e a versão do pacote
+  (lida do `package.json` e servida em `/api/screens`) à direita.
 - **Board** — plano com zoom e pan. Cada tela é um card com título e um `iframe` dentro.
 - **Cliente SSE** — assina `/events` e aplica os eventos no DOM.
 - **Map de assets** — `tela → recursos carregados`, lido de cada iframe a cada `load`.
@@ -133,11 +135,13 @@ Cada `iframe` começa com 1280px (referência de desktop), mas nem largura nem a
 fixas: no `load` de cada iframe o conteúdo real é medido (possível porque tudo é mesma
 origem) e o card se ajusta.
 
-A **largura** é a borda direita do elemento mais à direita do `body` — a caixa que envolve
-os elementos, não o `scrollWidth`. Assim uma tela mobile centralizada numa viewport larga
-resulta num card do tamanho da tela, e não num card de 1280px com faixas vazias dos lados.
-Fica limitada a 200–1280px. A medição vem primeiro, porque encolher o card reflui o
-conteúdo e a altura precisa ser lida já com a largura final.
+A **largura** é a caixa que envolve os elementos do topo do `body` — direita do mais à
+direita menos esquerda do mais à esquerda, não o `scrollWidth` nem só a borda direita. Uma
+tela mobile centralizada numa viewport de 1280px tem margem vazia dos dois lados, e só a
+diferença dá a largura da tela em si; encolher o card recentra o conteúdo e a margem some.
+Assim o card fica do tamanho da tela, não 1280px com faixas vazias. Limitada a 200–1280px.
+A medição vem primeiro, porque encolher o card reflui o conteúdo e a altura precisa ser
+lida já com a largura final.
 
 A **altura** é medida por `scrollHeight`, limitada a 400–3200px. Sem isso, uma landing page
 longa apareceria cortada dentro de uma janelinha, que é o oposto do que se quer ver num board.

@@ -11,6 +11,10 @@ import { startWatcher } from './watcher.js';
 import { SseHub } from './sse.js';
 
 const CLIENT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'client');
+const PKG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json');
+
+// Versao do pacote, lida uma vez, para o board mostrar no rodape.
+const VERSION = await fs.readFile(PKG_PATH, 'utf8').then((raw) => JSON.parse(raw).version).catch(() => '');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -165,7 +169,7 @@ export async function startServer({ dir, port, open = true }) {
     }
 
     if (pathname === '/api/screens') {
-      sendJson(res, 200, { root: rootDir, screens: await listScreens(rootDir) });
+      sendJson(res, 200, { root: rootDir, version: VERSION, screens: await listScreens(rootDir) });
       return;
     }
 
