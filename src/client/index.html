@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pinacoteca</title>
+  <link rel="stylesheet" href="/app/board.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <header class="sidebar-header">
+      <h1>Telas</h1>
+      <span id="screen-count" class="badge">0</span>
+    </header>
+    <nav id="screen-list" class="screen-list"></nav>
+    <footer class="sidebar-footer">
+      <div id="root-path" class="root-path"></div>
+      <div id="connection" class="connection" data-state="connecting">conectando</div>
+    </footer>
+  </aside>
+
+  <main id="viewport">
+    <div id="canvas"></div>
+
+    <div id="empty-state" class="empty-state" hidden>
+      <p>Nenhum arquivo <code>.html</code> nesta pasta.</p>
+      <p class="muted">Crie um e ele aparece aqui sozinho.</p>
+    </div>
+
+    <div class="toolbar">
+      <button type="button" data-action="zoom-out" title="Diminuir zoom">−</button>
+      <button type="button" data-action="zoom-reset" title="Zoom 100% (tecla 1)"><span id="zoom-label">100%</span></button>
+      <button type="button" data-action="zoom-in" title="Aumentar zoom">+</button>
+      <span class="toolbar-divider"></span>
+      <button type="button" data-action="fit" title="Enquadrar tudo (tecla 0)">Enquadrar</button>
+    </div>
+
+    <div class="hint">
+      scroll: mover · ctrl+scroll: zoom · arrastar: mover · duplo clique no card: interagir · esc: sair
+    </div>
+  </main>
+
+  <script type="module" src="/app/board.js"></script>
+</body>
+</html>

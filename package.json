@@ -1,0 +1,42 @@
+{
+  "name": "pinacoteca",
+  "version": "0.1.0",
+  "description": "board para ver todos os HTMLs de uma pasta lado a lado, com recarga automatica",
+  "type": "module",
+  "license": "MIT",
+  "author": "jpmpjp00@gmail.com",
+  "keywords": [
+    "html",
+    "preview",
+    "prototype",
+    "board",
+    "canvas",
+    "live-reload",
+    "design",
+    "wireframe",
+    "static",
+    "viewer"
+  ],
+  "bin": {
+    "pinacoteca": "bin/pinacoteca.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bin/pinacoteca.js",
+    "test": "node test/e2e.mjs"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3"
+  },
+  "devDependencies": {
+    "ws": "^8.18.0"
+  }
+}
