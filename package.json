@@ -39,12 +39,21 @@
   },
   "scripts": {
     "start": "node bin/pinacoteca.js",
-    "test": "node test/e2e.mjs"
+    "lint": "eslint .",
+    "typecheck": "tsc -p jsconfig.json",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "node --test test/unit.mjs",
+    "test:e2e": "node test/e2e.mjs",
+    "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
     "chokidar": "^4.0.3"
   },
   "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/ws": "^8.18.1",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
     "ws": "^8.18.0"
   }
 }

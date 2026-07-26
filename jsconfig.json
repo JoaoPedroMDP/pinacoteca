@@ -1,0 +1,20 @@
+{
+  // Checagem de tipos por JSDoc, sem build e sem TypeScript no codigo.
+  // O editor marca o erro na hora; `npm run typecheck` marca no terminal.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "allowJs": true,
+    "skipLibCheck": true,
+    // Impede o checador de entrar no .js das dependencias (chokidar, ws).
+    "maxNodeModuleJsDepth": 0,
+    "types": ["node"]
+  },
+  "include": ["bin/**/*.js", "src/**/*.js", "test/**/*.mjs", "eslint.config.js"],
+  "exclude": ["node_modules"]
+}
