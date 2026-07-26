@@ -1,3 +1,9 @@
+## 0.5.0 (2026-07-26)
+
+### Feat
+
+- Agora é possível reorganizar as telas
+
 ## 0.4.1 (2026-07-26)
 
 ### Refactor
