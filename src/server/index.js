@@ -1,4 +1,8 @@
+// @ts-check
 // Servidor HTTP: serve o board, os prototipos e o stream de eventos.
+//
+// Rota nova entra em `createRequestHandler`. As primitivas de resposta
+// (mime, caminho seguro, envio) moram em `http.js`.
 
 import http from 'node:http';
 import fs from 'node:fs/promises';
@@ -6,111 +10,30 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { listScreens, isIgnoredDir } from './screens.js';
+import { listScreens, isForbiddenPreviewPath } from './screens.js';
+import { resolveInside, sendFile, sendJson, sendText } from './http.js';
 import { startWatcher } from './watcher.js';
 import { SseHub } from './sse.js';
 
-const CLIENT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'client');
-const PKG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json');
+/** @typedef {import('node:http').IncomingMessage} IncomingMessage */
+/** @typedef {import('node:http').ServerResponse} ServerResponse */
+
+const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
+const CLIENT_DIR = path.join(SERVER_DIR, '..', 'client');
+const PKG_PATH = path.join(SERVER_DIR, '..', '..', 'package.json');
+
+// Endereco fixo: a ferramenta serve pastas arbitrarias do disco e nunca deve
+// ficar acessivel para fora da maquina.
+const HOST = '127.0.0.1';
+
+// Se a porta pedida estiver ocupada, tenta as seguintes. Morrer por porta
+// ocupada seria atrito a toa numa maquina de desenvolvimento.
+const PORT_ATTEMPTS = 10;
 
 // Versao do pacote, lida uma vez, para o board mostrar no rodape.
 const VERSION = await fs.readFile(PKG_PATH, 'utf8').then((raw) => JSON.parse(raw).version).catch(() => '');
 
-const MIME_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.htm': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.avif': 'image/avif',
-  '.ico': 'image/x-icon',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.otf': 'font/otf',
-  '.map': 'application/json; charset=utf-8',
-};
-
-function mimeTypeFor(filePath) {
-  return MIME_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
-}
-
-/**
- * Resolve um caminho vindo da URL dentro de `baseDir`.
- * Devolve null se escapar da pasta — protege contra path traversal.
- */
-function resolveInside(baseDir, relativePath) {
-  let decoded;
-  try {
-    decoded = decodeURIComponent(relativePath);
-  } catch {
-    return null;
-  }
-
-  const absolute = path.resolve(baseDir, `.${path.posix.sep}${decoded}`);
-  const prefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
-
-  if (absolute !== baseDir && !absolute.startsWith(prefix)) return null;
-  return absolute;
-}
-
-/**
- * Recusa o que nao faz parte de um prototipo: arquivos e pastas ocultos
- * (`.env`, `.git/config`, `.ssh`) e pastas de build.
- *
- * A ferramenta e apontada para pastas arbitrarias, entao servir tudo que esta
- * abaixo da raiz nao basta ser "so localhost": qualquer pagina aberta no mesmo
- * navegador consegue disparar requisicoes para ca.
- */
-function isForbiddenPreviewPath(rootDir, absolutePath) {
-  const relative = path.relative(rootDir, absolutePath);
-  if (relative === '') return true;
-
-  return relative.split(path.sep).some((segment) => segment.startsWith('.') || isIgnoredDir(segment));
-}
-
-function sendJson(res, status, body) {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(payload),
-    'Cache-Control': 'no-store',
-  });
-  res.end(payload);
-}
-
-function sendText(res, status, message) {
-  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end(message);
-}
-
-async function sendFile(res, filePath, { noStore = false } = {}) {
-  let content;
-  try {
-    content = await fs.readFile(filePath);
-  } catch {
-    sendText(res, 404, 'Nao encontrado');
-    return;
-  }
-
-  const headers = {
-    'Content-Type': mimeTypeFor(filePath),
-    'Content-Length': content.length,
-  };
-  // Prototipos nunca sao cacheados: o board conta com o disco ser a verdade.
-  if (noStore) headers['Cache-Control'] = 'no-store';
-
-  res.writeHead(200, headers);
-  res.end(content);
-}
-
+/** @param {string} url */
 function openBrowser(url) {
   const command = process.platform === 'darwin' ? 'open'
     : process.platform === 'win32' ? 'start'
@@ -125,9 +48,17 @@ function openBrowser(url) {
   }
 }
 
-/** Sobe o servidor tentando a porta pedida e as seguintes se estiverem ocupadas. */
-function listen(server, port, attemptsLeft = 10) {
+/**
+ * Sobe o servidor tentando a porta pedida e as seguintes se estiverem ocupadas.
+ *
+ * @param {import('node:http').Server} server
+ * @param {number} port
+ * @param {number} [attemptsLeft]
+ * @returns {Promise<number>} a porta em que de fato subiu
+ */
+function listen(server, port, attemptsLeft = PORT_ATTEMPTS) {
   return new Promise((resolve, reject) => {
+    /** @param {NodeJS.ErrnoException} error */
     function onError(error) {
       if (error.code === 'EADDRINUSE' && attemptsLeft > 0) {
         server.removeListener('error', onError);
@@ -138,28 +69,38 @@ function listen(server, port, attemptsLeft = 10) {
     }
 
     server.once('error', onError);
-    server.listen(port, '127.0.0.1', () => {
+    server.listen(port, HOST, () => {
       server.removeListener('error', onError);
       resolve(port);
     });
   });
 }
 
-export async function startServer({ dir, port, open = true }) {
-  const rootDir = path.resolve(dir);
-  const hub = new SseHub();
-
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    const pathname = url.pathname;
+/**
+ * Monta o roteador. Cada rota decide sozinha o que responder e retorna.
+ *
+ * | Rota            | Resposta                                          |
+ * | --------------- | ------------------------------------------------- |
+ * | `GET /`         | a pagina do board                                 |
+ * | `GET /app/*`    | CSS e JS do board                                 |
+ * | `GET /api/screens` | telas encontradas, raiz observada e versao     |
+ * | `GET /events`   | stream SSE de mudancas                            |
+ * | `GET /preview/*`| o arquivo cru do prototipo e seus assets          |
+ *
+ * @param {{ rootDir: string, hub: SseHub }} context
+ * @returns {(req: IncomingMessage, res: ServerResponse) => Promise<void>}
+ */
+export function createRequestHandler({ rootDir, hub }) {
+  return async function handleRequest(req, res) {
+    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      sendText(res, 405, 'Metodo nao suportado');
+      sendText(req, res, 405, 'Metodo nao suportado');
       return;
     }
 
     if (pathname === '/') {
-      await sendFile(res, path.join(CLIENT_DIR, 'index.html'), { noStore: true });
+      await sendFile(req, res, path.join(CLIENT_DIR, 'index.html'), { noStore: true });
       return;
     }
 
@@ -169,7 +110,7 @@ export async function startServer({ dir, port, open = true }) {
     }
 
     if (pathname === '/api/screens') {
-      sendJson(res, 200, { root: rootDir, version: VERSION, screens: await listScreens(rootDir) });
+      sendJson(req, res, 200, { root: rootDir, version: VERSION, screens: await listScreens(rootDir) });
       return;
     }
 
@@ -177,10 +118,10 @@ export async function startServer({ dir, port, open = true }) {
     if (pathname.startsWith('/app/')) {
       const target = resolveInside(CLIENT_DIR, pathname.slice('/app/'.length));
       if (!target) {
-        sendText(res, 403, 'Caminho invalido');
+        sendText(req, res, 403, 'Caminho invalido');
         return;
       }
-      await sendFile(res, target, { noStore: true });
+      await sendFile(req, res, target, { noStore: true });
       return;
     }
 
@@ -188,15 +129,26 @@ export async function startServer({ dir, port, open = true }) {
     if (pathname.startsWith('/preview/')) {
       const target = resolveInside(rootDir, pathname.slice('/preview/'.length));
       if (!target || isForbiddenPreviewPath(rootDir, target)) {
-        sendText(res, 403, 'Caminho invalido');
+        sendText(req, res, 403, 'Caminho invalido');
         return;
       }
-      await sendFile(res, target, { noStore: true });
+      await sendFile(req, res, target, { noStore: true });
       return;
     }
 
-    sendText(res, 404, 'Nao encontrado');
-  });
+    sendText(req, res, 404, 'Nao encontrado');
+  };
+}
+
+/**
+ * @param {{ dir: string, port: number, open?: boolean }} options
+ * @returns {Promise<{ url: string, port: number, rootDir: string, shutdown: () => Promise<void> }>}
+ */
+export async function startServer({ dir, port, open = true }) {
+  const rootDir = path.resolve(dir);
+  const hub = new SseHub();
+
+  const server = http.createServer(createRequestHandler({ rootDir, hub }));
 
   const actualPort = await listen(server, port);
   const url = `http://localhost:${actualPort}`;
@@ -204,7 +156,7 @@ export async function startServer({ dir, port, open = true }) {
   const watcher = startWatcher(rootDir, (event) => hub.broadcast(event));
 
   const screens = await listScreens(rootDir);
-  process.stdout.write(`\n  pinacoteca\n`);
+  process.stdout.write('\n  pinacoteca\n');
   process.stdout.write(`  pasta:  ${rootDir}\n`);
   process.stdout.write(`  telas:  ${screens.length}\n`);
   process.stdout.write(`  url:    ${url}\n\n`);

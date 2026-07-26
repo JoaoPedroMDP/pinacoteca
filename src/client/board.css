@@ -246,7 +246,8 @@ body {
   color: var(--text-muted);
   font-size: 16px;
   font-weight: 600;
-  /* 28px de linha + 8px de margin = CARD_TITLE_HEIGHT no board.js. */
+  /* 28px de linha + 8px de margin = CARD_TITLE_HEIGHT em constants.js.
+     Mudou aqui, muda la: o layout dos cards usa essa altura. */
   line-height: 28px;
   /*
    * O board inteiro escala por transform; sem isto o titulo encolheria junto ao
