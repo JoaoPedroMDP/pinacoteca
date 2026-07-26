@@ -102,6 +102,51 @@ body {
   color: var(--text-muted);
 }
 
+/* ---------- Arvore de pastas ---------- */
+
+.folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-toggle:hover {
+  background: #262b33;
+}
+
+.folder-toggle .caret {
+  display: inline-block;
+  flex: 0 0 auto;
+  transition: transform 120ms ease;
+}
+
+.folder-toggle[aria-expanded="true"] .caret {
+  transform: rotate(90deg);
+}
+
+.folder-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Indentacao por nivel: filhos recuam alem do caret da pasta pai. */
+.folder-children {
+  margin-left: 10px;
+  border-left: 1px solid var(--border);
+  padding-left: 4px;
+}
+
 /* Pisca quando o arquivo correspondente muda no disco. */
 .screen-item.is-updated {
   animation: flash 900ms ease-out;
@@ -171,6 +216,12 @@ body {
   cursor: grabbing;
 }
 
+/* Modo ponteiro: cursor normal em vez da mao de pan. */
+#viewport.is-pointer,
+#viewport.is-pointer .card-shield {
+  cursor: default;
+}
+
 #canvas {
   position: absolute;
   top: 0;
@@ -191,12 +242,25 @@ body {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 0 2px 8px;
+  padding: 0 2px;
   color: var(--text-muted);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  /* 28px de linha + 8px de padding = CARD_TITLE_HEIGHT no board.js. */
+  /* 28px de linha + 8px de margin = CARD_TITLE_HEIGHT no board.js. */
   line-height: 28px;
+  /*
+   * O board inteiro escala por transform; sem isto o titulo encolheria junto ao
+   * dar zoom out. Contra-escalar por 1/scale (--inv-scale, ajustado no applyTransform)
+   * mantem so a *fonte* em 16px reais na tela, ancorada na base (topo do frame).
+   *
+   * O espaco ate o card e um `margin-bottom` (layout, em px de canvas), fora do
+   * transform: ele escala junto com o board, entao a distancia entre titulo e tela
+   * encolhe no zoom out. Se fosse padding aqui dentro, seria contra-escalado e viraria
+   * um gap constante na tela — o titulo pareceria flutuar longe do card ao afastar.
+   */
+  margin-bottom: 8px;
+  transform: scale(var(--inv-scale, 1));
+  transform-origin: 0 100%;
 }
 
 .card.is-interactive .card-title {
@@ -273,6 +337,11 @@ body {
   background: #2b3038;
 }
 
+.toolbar button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #14161a;
+}
+
 .toolbar-divider {
   width: 1px;
   height: 18px;
@@ -306,6 +375,59 @@ body {
   padding: 1px 5px;
   border-radius: 4px;
   background: #262b33;
+}
+
+/* Aviso rapido de acao (ex.: XPath copiado). */
+.toast {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  max-width: calc(100% - 32px);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgb(27 30 36 / 96%);
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+
+.toast.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Tooltip do modo ponteiro: segue o cursor e mostra o alvo + dica do scroll. */
+.inspect-tip {
+  position: fixed;
+  z-index: 10;
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgb(20 22 26 / 96%);
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+
+.inspect-tip.is-visible {
+  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -123,10 +123,16 @@ eventos por arquivo antes de mandá-los ao cliente.
 
 ### Cliente (board)
 
-- **Sidebar** — lista as telas. Clicar centraliza o board naquele card. O rodapé mostra a
-  raiz observada e, embaixo, o estado da conexão SSE à esquerda e a versão do pacote
-  (lida do `package.json` e servida em `/api/screens`) à direita.
+- **Sidebar** — árvore de telas agrupadas por pasta. Cada pasta é um cabeçalho colapsável
+  (o estado de colapso vive num `Set` no cliente e persiste entre re-renders de add/remove);
+  a folha mostra só o nome do arquivo, já que o caminho vem do cabeçalho. Clicar numa folha
+  centraliza o board naquele card. O rodapé mostra a raiz observada e, embaixo, o estado da
+  conexão SSE à esquerda e a versão do pacote (lida do `package.json` e servida em
+  `/api/screens`) à direita.
 - **Board** — plano com zoom e pan. Cada tela é um card com título e um `iframe` dentro.
+  O título é contra-escalado por `1/scale` (via a variável CSS `--inv-scale`, ajustada no
+  `applyTransform`, com `transform-origin` na base): fica sempre 16px reais na tela, legível
+  em qualquer nível de zoom, ancorado logo acima do frame.
 - **Cliente SSE** — assina `/events` e aplica os eventos no DOM.
 - **Map de assets** — `tela → recursos carregados`, lido de cada iframe a cada `load`.
   Um evento `asset` recarrega apenas as telas cujo conjunto contém aquele arquivo.
@@ -173,6 +179,39 @@ o `pointerdown` ignora alvos dentro de `.toolbar` — senão a captura redirecio
 Duplo clique num card libera aquele card específico — o escudo some e o protótipo passa a
 receber cliques, para preencher formulário e navegar. `Esc` ou um clique fora devolve o
 controle ao board. Um card interativo por vez.
+
+**Alt+clique** num card copia o XPath do elemento sob o cursor. Como tudo é mesma origem,
+o cliente lê o elemento pelo `elementFromPoint` do iframe — convertendo as coordenadas do
+board (escaladas por `scale`) de volta ao espaço interno do iframe. O XPath usa `@id` quando
+existe, senão é absoluto com índices por irmão de mesma tag. Serve para apontar ao agente de
+IA exatamente qual pedaço da tela deve mudar. O `pointerdown` do pan ignora o evento quando
+`altKey` está pressionada, para o clique chegar ao escudo em vez de virar arrasto.
+
+Uma tela recém-detectada (evento `add`, ou `change` de arquivo ainda não montado) recebe o
+foco: o board enquadra e centraliza nela automaticamente.
+
+#### Modo ponteiro
+
+A toolbar alterna entre dois modos. No **pan** (padrão) o cursor é a mão e arrastar move o
+board. No **ponteiro** o cursor é normal e arrastar com o botão esquerdo não move o board (o
+do meio ainda move); ao passar o mouse sobre um card, o elemento sob o cursor fica em foco e
+os demais daquele card recebem `.pina-dim` (blur). O alvo
+em foco ainda recebe `.pina-focus` (outline azul), para deixar claro o limite do elemento.
+
+O destaque é feito dentro do iframe (mesma origem): um `<style>` é injetado no `load` de cada
+tela, e a cada movimento o `elementFromPoint` do iframe — com as coordenadas do board
+convertidas de volta ao espaço interno — diz qual elemento está sob o cursor. Esse é o alvo
+_exato_ (nível 0). Para cada ancestral do alvo, os irmãos fora do caminho ganham `.pina-dim`;
+o alvo e seus filhos ficam nítidos.
+
+Como `<div>` também serve a layout (e não só a blocos semânticos), fixar a granularidade num
+nível só é imprevisível. Por isso o **scroll do mouse** ajusta o nível: sobe (`+1`) ou desce
+(`-1`) um ancestral a partir da base sob o cursor (`inspectLevel`, limitado ao `<body>`),
+então dá para abrir do elemento exato até o bloco que interessa. O delta do scroll é acumulado
+e só troca de nível a cada `WHEEL_STEP` (60px), senão o touchpad — que dispara muitos deltas
+pequenos — pularia vários níveis por toque. Um **tooltip** ao
+lado do cursor mostra o alvo atual (`tag#id`/`tag.classe`) e a dica do scroll. Mover o cursor
+para um novo elemento reinicia o nível em 0.
 
 #### Recarregamento
 

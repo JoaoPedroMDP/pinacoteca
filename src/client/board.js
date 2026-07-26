@@ -30,6 +30,12 @@ let translateX = 0;
 let translateY = 0;
 let interactiveFile = null;
 
+// Pastas colapsadas na sidebar, por caminho de pasta. Persiste entre re-render (add/remove).
+const collapsedDirs = new Set();
+
+// 'pan' (arrasta o board, cursor de mao) ou 'pointer' (cursor normal; hover destaca elementos).
+let mode = 'pan';
+
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 // Cada segmento e escapado separadamente: as barras continuam sendo barras.
@@ -41,6 +47,8 @@ const previewUrl = (file) => `/preview/${encodePath(file)}?t=${Date.now()}`;
 
 function applyTransform() {
   canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+  // Contra-escala dos titulos: cada .card-title usa 1/scale para ficar sempre 16px na tela.
+  canvas.style.setProperty('--inv-scale', String(1 / scale));
   zoomLabel.textContent = `${Math.round(scale * 100)}%`;
 }
 
@@ -239,6 +247,15 @@ function createCard(file) {
   const shield = document.createElement('div');
   shield.className = 'card-shield';
   shield.addEventListener('dblclick', () => setInteractive(file));
+  // Alt+clique captura o elemento sob o cursor e copia o XPath dele.
+  shield.addEventListener('click', (event) => {
+    if (event.altKey) copyXPathAt(file, event);
+  });
+  // No modo ponteiro, passar o mouse destaca o elemento sob o cursor.
+  shield.addEventListener('pointermove', (event) => onInspectMove(file, event));
+  shield.addEventListener('pointerleave', () => {
+    if (mode === 'pointer') clearHoverHighlight();
+  });
 
   frame.append(iframe, shield);
   card.append(title, frame);
@@ -247,15 +264,8 @@ function createCard(file) {
   item.type = 'button';
   item.className = 'screen-item';
   item.title = file;
-  const slash = file.lastIndexOf('/');
-  if (slash === -1) {
-    item.textContent = file;
-  } else {
-    const dir = document.createElement('span');
-    dir.className = 'dir';
-    dir.textContent = `${file.slice(0, slash + 1)}`;
-    item.append(dir, document.createTextNode(file.slice(slash + 1)));
-  }
+  // Na arvore o caminho da pasta ja vem do cabecalho; a folha mostra so o nome do arquivo.
+  item.textContent = file.slice(file.lastIndexOf('/') + 1);
   item.addEventListener('click', () => centerOn(file));
 
   const screen = {
@@ -266,6 +276,8 @@ function createCard(file) {
   iframe.addEventListener('load', () => {
     // Recalculado a cada carga: o map nunca fica velho.
     screen.assets = collectAssets(screen);
+    // Estilo do destaque some quando o iframe recarrega; reinjeta.
+    injectInspectStyle(iframe.contentDocument);
     // Segunda passada para os recursos que chegam depois do load (JS tardio,
     // imagem pedida por CSS que so entrou agora).
     clearTimeout(screen.lateScan);
@@ -332,9 +344,73 @@ function reloadCard(file) {
   screen.item.classList.add('is-updated');
 }
 
+// Monta uma arvore de pastas a partir dos caminhos relativos das telas.
+function buildTree(files) {
+  const root = { path: '', dirs: new Map(), files: [] };
+  for (const file of files) {
+    const parts = file.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const name = parts[i];
+      if (!node.dirs.has(name)) {
+        node.dirs.set(name, {
+          path: node.path ? `${node.path}/${name}` : name,
+          dirs: new Map(),
+          files: [],
+        });
+      }
+      node = node.dirs.get(name);
+    }
+    node.files.push(file);
+  }
+  return root;
+}
+
+function folderElement(name, node) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tree-folder';
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'folder-toggle';
+  const collapsed = collapsedDirs.has(node.path);
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+
+  const caret = document.createElement('span');
+  caret.className = 'caret';
+  caret.textContent = '▸';
+  const label = document.createElement('span');
+  label.className = 'folder-name';
+  label.textContent = name;
+  toggle.append(caret, label);
+  toggle.addEventListener('click', () => {
+    if (collapsedDirs.has(node.path)) collapsedDirs.delete(node.path);
+    else collapsedDirs.add(node.path);
+    renderSidebar();
+  });
+
+  const children = document.createElement('div');
+  children.className = 'folder-children';
+  children.hidden = collapsed;
+  children.append(...renderNodes(node));
+
+  wrap.append(toggle, children);
+  return wrap;
+}
+
+// Pastas primeiro (em ordem), depois os arquivos daquele nivel.
+function renderNodes(node) {
+  const out = [];
+  const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b));
+  for (const name of dirNames) out.push(folderElement(name, node.dirs.get(name)));
+  const files = [...node.files].sort((a, b) => a.localeCompare(b));
+  for (const file of files) out.push(screens.get(file).item);
+  return out;
+}
+
 function renderSidebar() {
   const files = [...screens.keys()].sort((a, b) => a.localeCompare(b));
-  screenList.replaceChildren(...files.map((file) => screens.get(file).item));
+  screenList.replaceChildren(...renderNodes(buildTree(files)));
   screenCount.textContent = String(files.length);
   emptyState.hidden = files.length > 0;
 }
@@ -353,9 +429,284 @@ function setInteractive(file) {
   }
 }
 
+/* ---------- Captura de XPath ---------- */
+
+// XPath absoluto do elemento; usa @id quando existe (mais curto e estavel).
+function computeXPath(el) {
+  if (el.id) return `//*[@id="${el.id}"]`;
+
+  const parts = [];
+  let node = el;
+  while (node && node.nodeType === 1) {
+    let index = 1;
+    for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
+      if (sib.nodeName === node.nodeName) index += 1;
+    }
+    parts.unshift(`${node.nodeName.toLowerCase()}[${index}]`);
+    if (node.nodeName === 'HTML') break;
+    node = node.parentElement;
+  }
+  return `/${parts.join('/')}`;
+}
+
+// Mesma origem: da para ler o elemento sob o cursor dentro do iframe.
+// As coordenadas do board estao escaladas por `scale`, entao dividimos para voltar
+// ao espaco interno do iframe antes de chamar elementFromPoint.
+function copyXPathAt(file, event) {
+  const screen = screens.get(file);
+  if (!screen) return;
+
+  let el = null;
+  try {
+    const rect = screen.iframe.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / scale;
+    const y = (event.clientY - rect.top) / scale;
+    el = screen.iframe.contentDocument?.elementFromPoint(x, y) ?? null;
+  } catch {
+    el = null;
+  }
+  if (!el) return;
+
+  const xpath = computeXPath(el);
+  copyText(xpath);
+  showToast(`XPath copiado — ${xpath}`);
+}
+
+function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.append(area);
+  area.select();
+  try { document.execCommand('copy'); } catch { /* sem clipboard disponivel */ }
+  area.remove();
+}
+
+let toastTimer = null;
+function showToast(message) {
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.className = 'toast';
+    document.body.append(toast);
+  }
+  toast.textContent = message;
+  toast.classList.add('is-visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('is-visible'), 2400);
+}
+
+/* ---------- Modo ponteiro (destaque no hover) ---------- */
+
+// Injetado dentro de cada iframe (mesma origem). Os elementos "de fora" do foco
+// recebem .pina-dim: leve blur + escurecida, opacidade 80%.
+const INSPECT_CSS =
+  '.pina-dim{filter:blur(1.5px)!important;transition:filter .12s ease;}'
+  + '.pina-focus{outline:2px solid #6ea8fe!important;outline-offset:1px!important;}';
+
+function injectInspectStyle(doc) {
+  try {
+    if (!doc || doc.getElementById('pina-inspect-style')) return;
+    const style = doc.createElement('style');
+    style.id = 'pina-inspect-style';
+    style.textContent = INSPECT_CSS;
+    (doc.head || doc.documentElement).appendChild(style);
+  } catch {
+    // Iframe cross-origin ou ainda sem documento: ignora.
+  }
+}
+
+// Estado do destaque. `hoverBase` e o elemento exato mais fundo sob o cursor;
+// `inspectLevel` sobe pela cadeia de ancestrais (scroll do mouse) e `hoverEl` e o
+// alvo resultante (base subida `inspectLevel` niveis).
+let hoverScreen = null;
+let hoverBase = null;
+let hoverEl = null;
+let inspectLevel = 0;
+// Scroll acumulado: so muda o nivel a cada WHEEL_STEP px. Segura o touchpad,
+// que dispara muitos deltas pequenos e antes trocava o nivel a cada toque.
+let wheelAccum = 0;
+const WHEEL_STEP = 100;
+
+function clearHoverHighlight() {
+  if (hoverScreen) {
+    try {
+      hoverScreen.iframe.contentDocument
+        ?.querySelectorAll('.pina-dim, .pina-focus')
+        .forEach((el) => el.classList.remove('pina-dim', 'pina-focus'));
+    } catch { /* iframe trocou de src no meio: nada a limpar */ }
+  }
+  hoverScreen = null;
+  hoverBase = null;
+  hoverEl = null;
+  inspectLevel = 0;
+  wheelAccum = 0;
+  hideInspectTip();
+}
+
+// Quantos ancestrais existem entre a base e o <body> — teto do nivel de scroll.
+function maxLevelFor(base) {
+  let count = 0;
+  let node = base;
+  while (node.parentElement && node.nodeName !== 'BODY') {
+    node = node.parentElement;
+    count += 1;
+  }
+  return count;
+}
+
+// Alvo = base subindo `level` ancestrais, sem passar do <body>.
+function targetFromBase(base, level) {
+  let node = base;
+  for (let i = 0; i < level && node.parentElement && node.nodeName !== 'BODY'; i += 1) {
+    node = node.parentElement;
+  }
+  return node;
+}
+
+// (Re)aplica o dim para o alvo do nivel atual e move o tooltip para o cursor.
+function applyHover(doc, clientX, clientY) {
+  try {
+    doc.querySelectorAll('.pina-dim, .pina-focus')
+      .forEach((el) => el.classList.remove('pina-dim', 'pina-focus'));
+  } catch { /* iframe trocou de src: nada a limpar */ }
+  const target = targetFromBase(hoverBase, inspectLevel);
+  dimOthers(doc, target);
+  target.classList.add('pina-focus');
+  hoverEl = target;
+  showInspectTip(target, clientX, clientY);
+}
+
+// Escurece tudo que nao esta no ramo do elemento sob o cursor: para cada ancestral,
+// os irmaos fora do caminho ganham .pina-dim. O elemento e seus filhos ficam nitidos.
+function dimOthers(doc, el) {
+  const root = doc.documentElement;
+  let node = el;
+  while (node && node.parentElement) {
+    const parent = node.parentElement;
+    for (const child of parent.children) {
+      if (child === node) continue;
+      if (child.nodeName === 'STYLE' || child.nodeName === 'SCRIPT') continue;
+      child.classList.add('pina-dim');
+    }
+    if (parent === root) break;
+    node = parent;
+  }
+}
+
+function onInspectMove(file, event) {
+  if (mode !== 'pointer') return;
+  const screen = screens.get(file);
+  if (!screen) return;
+
+  let base = null;
+  let doc = null;
+  try {
+    doc = screen.iframe.contentDocument;
+    const rect = screen.iframe.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / scale;
+    const y = (event.clientY - rect.top) / scale;
+    base = doc?.elementFromPoint(x, y) ?? null;
+  } catch {
+    base = null;
+  }
+  if (!base || !doc) {
+    clearHoverHighlight();
+    return;
+  }
+
+  // Mesma base: so acompanha o cursor com o tooltip, mantendo o nivel de scroll.
+  if (base === hoverBase && screen === hoverScreen) {
+    showInspectTip(hoverEl, event.clientX, event.clientY);
+    return;
+  }
+
+  // Base nova: reinicia no elemento exato (nivel 0).
+  clearHoverHighlight();
+  injectInspectStyle(doc);
+  hoverScreen = screen;
+  hoverBase = base;
+  inspectLevel = 0;
+  applyHover(doc, event.clientX, event.clientY);
+}
+
+// Scroll do mouse no modo ponteiro: +1 sobe um ancestral, -1 volta pro filho.
+function adjustInspectLevel(delta, clientX, clientY) {
+  if (!hoverScreen || !hoverBase) return;
+  const doc = hoverScreen.iframe.contentDocument;
+  if (!doc) return;
+  inspectLevel = clamp(inspectLevel + delta, 0, maxLevelFor(hoverBase));
+  applyHover(doc, clientX, clientY);
+}
+
+/* ---------- Tooltip do modo ponteiro ---------- */
+
+// Descreve o alvo de forma curta: tag + #id ou .classe (ignora .pina-dim).
+function describeEl(el) {
+  let text = el.nodeName.toLowerCase();
+  if (el.id) {
+    text += `#${el.id}`;
+  } else {
+    const cls = [...el.classList].find((c) => c !== 'pina-dim' && c !== 'pina-focus');
+    if (cls) text += `.${cls}`;
+  }
+  return text;
+}
+
+function showInspectTip(el, clientX, clientY) {
+  if (!el) return;
+  let tip = document.getElementById('inspect-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'inspect-tip';
+    tip.className = 'inspect-tip';
+    document.body.append(tip);
+  }
+  tip.textContent = `${describeEl(el)} · scroll: muda o nivel`;
+  tip.style.left = `${clientX + 14}px`;
+  tip.style.top = `${clientY + 14}px`;
+  tip.classList.add('is-visible');
+}
+
+function hideInspectTip() {
+  document.getElementById('inspect-tip')?.classList.remove('is-visible');
+}
+
+function setMode(next) {
+  mode = next;
+  viewport.classList.toggle('is-pointer', mode === 'pointer');
+  if (mode !== 'pointer') clearHoverHighlight();
+  const button = document.querySelector('[data-action="toggle-mode"]');
+  if (button) button.setAttribute('aria-pressed', String(mode === 'pointer'));
+}
+
 /* ---------- Pan e zoom ---------- */
 
 viewport.addEventListener('wheel', (event) => {
+  // No modo ponteiro sobre um card, o scroll muda o nivel do destaque (nao zoom/pan).
+  if (mode === 'pointer' && hoverScreen) {
+    event.preventDefault();
+    // Troca de direcao zera o acumulado: nao "gasta" scroll do sentido anterior.
+    if ((wheelAccum < 0) !== (event.deltaY < 0)) wheelAccum = 0;
+    wheelAccum += event.deltaY;
+    while (Math.abs(wheelAccum) >= WHEEL_STEP) {
+      // Scroll pra cima (deltaY < 0) sobe um ancestral; pra baixo volta pro filho.
+      adjustInspectLevel(wheelAccum < 0 ? 1 : -1, event.clientX, event.clientY);
+      wheelAccum -= Math.sign(wheelAccum) * WHEEL_STEP;
+    }
+    return;
+  }
+
   // Sobre um card em modo de interacao o scroll pertence ao prototipo.
   if (interactiveFile && event.target.closest?.('.card.is-interactive')) return;
 
@@ -376,6 +727,10 @@ let panStartY = 0;
 
 viewport.addEventListener('pointerdown', (event) => {
   if (event.button !== 0 && event.button !== 1) return;
+  // Alt+clique e captura de XPath, nao pan: deixa o evento chegar ao escudo.
+  if (event.altKey) return;
+  // No modo ponteiro o arrasto com botao esquerdo nao move o board (o do meio ainda move).
+  if (mode === 'pointer' && event.button === 0) return;
   if (interactiveFile && event.target.closest?.('.card.is-interactive')) return;
   // A toolbar fica dentro do viewport: sem isso o setPointerCapture abaixo
   // redirecionaria o clique para o viewport e os botoes nunca disparariam.
@@ -415,6 +770,7 @@ document.querySelector('.toolbar').addEventListener('click', (event) => {
   else if (action === 'zoom-out') zoomByStep(1 / ZOOM_STEP);
   else if (action === 'zoom-reset') { scale = 1; applyTransform(); }
   else if (action === 'fit') fitToScreen();
+  else if (action === 'toggle-mode') setMode(mode === 'pointer' ? 'pan' : 'pointer');
 });
 
 window.addEventListener('keydown', (event) => {
@@ -463,12 +819,14 @@ function connectEvents() {
     if (type === 'change') {
       // Um 'change' em arquivo que ainda nao existe no board equivale a um 'add'.
       if (screens.has(file)) reloadCard(file);
-      else { createCard(file); renderSidebar(); layout(); }
+      else { createCard(file); renderSidebar(); layout(); centerOn(file); }
     } else if (type === 'add') {
       if (!screens.has(file)) {
         createCard(file);
         renderSidebar();
         layout();
+        // Tela recem-detectada ganha o foco: enquadra e centraliza nela.
+        centerOn(file);
       }
     } else if (type === 'unlink') {
       removeCard(file);
