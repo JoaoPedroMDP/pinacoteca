@@ -70,12 +70,19 @@ Node.js 18 ou superior.
 ```bash
 npm install
 npm start -- ./alguma-pasta
-npm test
+
+npm run check      # lint + tipos + testes
+npm run lint
+npm run typecheck  # tsc sobre o JSDoc, sem build
+npm test           # unitário + ponta a ponta
 ```
 
-A suíte sobe o servidor de verdade, abre o Chrome em modo headless via CDP e verifica o
-comportamento real de recarga — inclusive que uma mudança em CSS recarrega só as telas
-que o usam. Precisa do Chrome instalado.
+O teste unitário cobre as funções puras. O ponta a ponta sobe o servidor de verdade, abre
+o Chrome em modo headless via CDP e verifica o comportamento real de recarga — inclusive
+que uma mudança em CSS recarrega só as telas que o usam. Precisa do Chrome instalado; sem
+ele, essa suíte se declara ignorada em vez de falhar.
+
+O código e as decisões estão documentados em [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Licença
 

@@ -62,7 +62,8 @@ CSS e asset injetado por JS em runtime. Um parser de HTML no servidor erraria no
 e ainda exigiria um parser de CSS junto, com invalidação de cache própria.
 
 A lista é recoletada no evento `load` de cada iframe, então o map se auto-corrige a cada
-recarregamento em vez de precisar ser invalidado. Uma segunda passada ~1,2s depois pega
+recarregamento em vez de precisar ser invalidado. Uma segunda passada, `LATE_ASSET_SCAN_MS`
+depois, pega
 recursos que chegam tarde.
 
 Limite conhecido: se uma tela referencia um arquivo que ainda não existe, o recurso só
@@ -76,11 +77,15 @@ de listeners. A superfície do produto é pequena demais para pagar o custo de b
 
 ## Componentes
 
-### CLI (`bin/pinacoteca.js`)
+### CLI (`bin/pinacoteca.js` + `src/cli.js`)
 
-Resolve os argumentos e entrega tudo para `startServer`. A pasta é opcional e o padrão é
-o diretório atual — o caso comum é entrar na pasta dos protótipos e rodar `pinacoteca`
-sem mais nada.
+A leitura dos argumentos vive em `src/cli.js` e é uma função pura: `parseArgs` devolve
+`{ kind: 'run' | 'help' | 'error' }` e não escreve na saída, não encerra o processo e não
+toca no disco. `bin/pinacoteca.js` é a casca que traduz esse resultado em texto e código
+de saída. Assim o parsing é testável sem subir nada (`test/unit.mjs`).
+
+A pasta é opcional e o padrão é o diretório atual — o caso comum é entrar na pasta dos
+protótipos e rodar `pinacoteca` sem mais nada.
 
 | Argumento | Efeito |
 | --- | --- |
@@ -94,6 +99,24 @@ ferramenta morrer por causa de uma porta ocupada seria atrito à toa numa máqui
 desenvolvimento, onde sempre há algo escutando em porta redonda.
 
 ### Servidor (Node)
+
+| Arquivo | O que possui |
+| --- | --- |
+| `src/server/index.js` | as rotas (`createRequestHandler`) e o ciclo de vida (`startServer`) |
+| `src/server/http.js` | primitivas sem produto: mime, caminho seguro, envio de resposta |
+| `src/server/screens.js` | descoberta das telas e a política de "o que é um protótipo" |
+| `src/server/watcher.js` | `chokidar` traduzido em eventos do board |
+| `src/server/sse.js` | o canal aberto com cada board |
+
+Rota nova entra em `createRequestHandler`. Se ela precisar de algo que qualquer outra
+rota também usaria, isso desce para `http.js`.
+
+`screens.js` decide duas coisas com a mesma regra: o que a varredura ignora e o que
+`/preview/` recusa servir. Elas moram juntas de propósito — se divergirem, a ferramenta
+lista um arquivo que depois se recusa a mostrar.
+
+`HEAD` é aceito junto com `GET`, e o corpo nunca é enviado nele. Isso é decidido num
+lugar só, no `send` de `http.js`, e não em cada rota.
 
 | Responsabilidade | Detalhe |
 | --- | --- |
@@ -118,10 +141,40 @@ o arquivo mudou. Quem cruza isso com o map de recursos é o cliente.
 
 Mudanças de arquivo chegam em rajada (um salvamento pode disparar vários eventos de
 `fs`). Duas defesas: o `awaitWriteFinish` do chokidar espera o arquivo parar de crescer,
-para o board nunca carregar um HTML escrito pela metade, e um debounce de 80ms agrupa os
-eventos por arquivo antes de mandá-los ao cliente.
+para o board nunca carregar um HTML escrito pela metade, e um debounce (`DEBOUNCE_MS`)
+agrupa os eventos por arquivo antes de mandá-los ao cliente.
 
 ### Cliente (board)
+
+Sem framework e sem bundler, mas dividido em módulos ES nativos. `index.html` carrega só
+`board.js`; o resto entra por `import`.
+
+| Arquivo | O que possui |
+| --- | --- |
+| `src/client/board.js` | entrypoint: carga inicial e ligação do stream |
+| `src/client/constants.js` | todos os números ajustáveis do board |
+| `src/client/utils.js` | funções puras: sem DOM, sem estado |
+| `src/client/dom.js` | as referências aos elementos de `index.html` |
+| `src/client/state.js` | **todo** o estado mutável: telas, zoom/pan, modo |
+| `src/client/view.js` | câmera: zoom, pan e layout dos cards |
+| `src/client/cards.js` | criação, recarga e medida de cada tela |
+| `src/client/sidebar.js` | árvore de telas por pasta |
+| `src/client/inspect.js` | modo ponteiro e captura de XPath |
+| `src/client/feedback.js` | toast e área de transferência |
+| `src/client/controls.js` | listeners de mouse, teclado e toolbar |
+| `src/client/sse.js` | eventos do servidor aplicados no board |
+
+Duas regras seguram essa divisão:
+
+1. **Nenhum módulo fora de `state.js` declara estado de escopo de módulo.** Quem precisa
+   guardar algo entre eventos guarda lá. `state.js` exporta objetos mutáveis (`view`,
+   `ui`), então `import { view }` dá uma referência viva e ninguém precisa de setter. As
+   exceções são estados de *um gesto em andamento* (o acumulado da roda, o ponteiro do
+   arrasto), que vivem no módulo do gesto e morrem com ele.
+2. **As dependências apontam numa direção só**, de cima para baixo nesta lista. `view.js`
+   não conhece `cards.js`, `sidebar.js` não conhece `view.js`. É o que impede ciclo de
+   import — e é por isso que as constantes têm módulo próprio em vez de morar no arquivo
+   que mais as usa.
 
 - **Sidebar** — árvore de telas agrupadas por pasta. Cada pasta é um cabeçalho colapsável
   (o estado de colapso vive num `Set` no cliente e persiste entre re-renders de add/remove);
@@ -145,11 +198,13 @@ A **largura** é a caixa que envolve os elementos do topo do `body` — direita 
 direita menos esquerda do mais à esquerda, não o `scrollWidth` nem só a borda direita. Uma
 tela mobile centralizada numa viewport de 1280px tem margem vazia dos dois lados, e só a
 diferença dá a largura da tela em si; encolher o card recentra o conteúdo e a margem some.
-Assim o card fica do tamanho da tela, não 1280px com faixas vazias. Limitada a 200–1280px.
+Assim o card fica do tamanho da tela, não 1280px com faixas vazias. Limitada entre
+`MIN_FRAME_WIDTH` e `CARD_WIDTH`.
 A medição vem primeiro, porque encolher o card reflui o conteúdo e a altura precisa ser
 lida já com a largura final.
 
-A **altura** é medida por `scrollHeight`, limitada a 400–3200px. Sem isso, uma landing page
+A **altura** é medida por `scrollHeight`, limitada entre `MIN_FRAME_HEIGHT` e
+`MAX_FRAME_HEIGHT`. Sem isso, uma landing page
 longa apareceria cortada dentro de uma janelinha, que é o oposto do que se quer ver num board.
 
 Essa altura é aplicada como `height` inline no `.card-frame`, e o frame precisa ficar com
@@ -208,9 +263,9 @@ o alvo e seus filhos ficam nítidos.
 
 Como `<div>` também serve a layout (e não só a blocos semânticos), fixar a granularidade num
 nível só é imprevisível. Por isso o **scroll do mouse** ajusta o nível: sobe (`+1`) ou desce
-(`-1`) um ancestral a partir da base sob o cursor (`inspectLevel`, limitado ao `<body>`),
+(`-1`) um ancestral a partir da base sob o cursor (`hover.level`, limitado ao `<body>`),
 então dá para abrir do elemento exato até o bloco que interessa. O delta do scroll é acumulado
-e só troca de nível a cada `WHEEL_STEP` (60px), senão o touchpad — que dispara muitos deltas
+e só troca de nível a cada `WHEEL_STEP`, senão o touchpad — que dispara muitos deltas
 pequenos — pularia vários níveis por toque. Um **tooltip** ao
 lado do cursor mostra o alvo atual (`tag#id`/`tag.classe`) e a dica do scroll. Mover o cursor
 para um novo elemento reinicia o nível em 0.
@@ -225,11 +280,17 @@ volta para o topo a cada salvamento.
 
 ```
 pinacoteca/
-├─ bin/          # entrypoint da CLI
+├─ bin/            # casca da CLI: saída e código de saída
 ├─ src/
-│  ├─ server/    # servidor HTTP, rotas, SSE, file watcher
-│  └─ client/    # board: HTML, CSS e JS servidos ao navegador
-├─ test/         # suite ponta a ponta (Chrome headless via CDP)
+│  ├─ cli.js       # leitura dos argumentos (pura, testável)
+│  ├─ server/      # servidor HTTP, rotas, SSE, file watcher
+│  └─ client/      # board: HTML, CSS e módulos ES servidos ao navegador
+├─ test/
+│  ├─ harness.mjs  # encanação do e2e: fixture, servidor, Chrome, asserções
+│  ├─ e2e.mjs      # comportamento observável no navegador
+│  └─ unit.mjs     # funções puras
+├─ eslint.config.js
+├─ jsconfig.json
 ├─ README.md
 ├─ CLAUDE.md
 ├─ CONSTITUTION.md
@@ -237,20 +298,62 @@ pinacoteca/
 ```
 
 O pacote publicado no npm chama-se `pinacoteca` e leva apenas `bin/`, `src/`, `README.md`
-e `LICENSE`. Única dependência de runtime: `chokidar`. `ws` é dependência só de teste.
+e `LICENSE`. Única dependência de runtime: `chokidar`. `ws`, `eslint`, `typescript` e
+`@types/node` são dependências só de desenvolvimento.
 
 ## Testes
 
-`test/e2e.mjs`, rodado com `npm test`. Não há teste unitário: quase todo o valor da
-ferramenta está em comportamento que só existe com um navegador de verdade no meio —
-o iframe recarregar sozinho, o map de assets ser lido do `performance`, o board montar
-os cards. Mockar isso testaria a maquete, não o produto.
+`npm test` roda duas suítes, nesta ordem: `test/unit.mjs` e `test/e2e.mjs`.
 
-A suíte sobe o servidor real numa pasta temporária, abre o Chrome headless e o dirige
-pelo CDP, verificando o comportamento observável: cards montados, recarga por CSS
-compartilhado, recarga pela cadeia de `@import`, criação e remoção de tela, estado da
-conexão SSE e os acessos que devem ser recusados. Sem Chrome instalado, a suíte se
-declara ignorada em vez de falhar.
+**Unitário** (`node:test`) cobre só função pura: leitura de argumentos, resolução de
+caminho seguro, política de arquivo proibido, árvore da sidebar, XPath. São decisões que
+cabem em entrada e saída, e testar cada uma custa milissegundos.
+
+**Ponta a ponta** cobre o resto, que é quase todo o valor da ferramenta: comportamento
+que só existe com um navegador de verdade no meio — o iframe recarregar sozinho, o map de
+assets ser lido do `performance`, o board montar os cards. Mockar isso testaria a maquete,
+não o produto. A suíte sobe o servidor real numa pasta temporária, abre o Chrome headless
+e o dirige pelo CDP. Sem Chrome instalado, ela se declara ignorada em vez de falhar.
+
+Duas regras mantêm o e2e rápido e estável:
+
+- **Nenhum `sleep` de valor fixo.** Toda espera é uma condição com prazo
+  (`checkEventually`), que passa assim que a condição vale. Número mágico de espera é o
+  que deixa suíte lenta na máquina rápida e instável na máquina carregada.
+- **Quando o instante da coleta importa, o próprio predicado provoca o estímulo.** O map
+  de assets do board só fica completo depois da segunda passada; em vez de esperar esse
+  prazo, o teste reescreve o CSS a cada tentativa. Assim ele passa assim que a coleta
+  terminar, sem depender de quando ela terminou.
+
+`harness.mjs` guarda toda a encanação — WebSocket, protocolo CDP, pasta temporária,
+asserções. Teste novo não precisa entender CDP: importa `check`/`checkEventually` e
+descreve a condição.
+
+## Guardrails
+
+O projeto não tem build, mas tem três verificações. `npm run check` roda as três.
+
+| Comando | O que pega |
+| --- | --- |
+| `npm run lint` | `eslint .` — variável não usada, `var`, `==`, função que cresceu demais |
+| `npm run typecheck` | `tsc` sobre o JSDoc (`jsconfig.json`, `checkJs` + `strict`) |
+| `npm test` | unitário e ponta a ponta |
+
+Todo arquivo `.js` começa com `// @ts-check` e descreve os parâmetros em JSDoc. Não há
+TypeScript no código e não há passo de build: o editor e o `tsc` leem os comentários. É o
+que faz um campo esquecido ou um `null` não tratado aparecer na hora de escrever, e não
+no board.
+
+O tipo `Screen` (em `state.js`) declara **todos** os campos de uma tela, e `createCard` os
+inicializa todos — inclusive os que só ganham valor depois (`pendingScroll`, `lateScan`).
+Campo que nasce no meio do código é campo que o leitor seguinte não sabe que existe.
+
+### Documentação não repete número
+
+Este arquivo explica *por quê*. O código diz *quanto*. Quando um valor tem nome
+(`WHEEL_STEP`, `MIN_FRAME_HEIGHT`, `DEBOUNCE_MS`), a documentação cita o nome, nunca o
+número — número copiado para cá vira mentira no primeiro ajuste. Os do cliente estão em
+`src/client/constants.js`; os do servidor, no topo do módulo que os usa.
 
 ## Superfície exposta
 
@@ -258,6 +361,34 @@ O servidor escuta só em `127.0.0.1`. Como a ferramenta é apontada para pastas 
 `/preview/` recusa três coisas: caminhos que escapam da raiz, arquivos e pastas ocultos
 (`.env`, `.git/`) e diretórios de build. Sem isso, rodar na raiz de um projeto exporia
 segredos a qualquer página aberta no mesmo navegador.
+
+## Como adicionar uma feature
+
+1. **Confira o escopo.** Se não ajuda a *ver* o HTML que já está no disco, pare aqui
+   (veja "Fora de escopo").
+2. **Ache o módulo dono.** Use a tabela do cliente ou a do servidor. Se a mudança couber
+   em um módulo existente, ela vai lá — arquivo novo só quando o existente passou a fazer
+   duas coisas.
+
+   | O que você vai mexer | Onde |
+   | --- | --- |
+   | Um número (tamanho, prazo, limite) | `src/client/constants.js` |
+   | Zoom, pan, posição dos cards | `src/client/view.js` |
+   | O que um card mostra ou mede | `src/client/cards.js` |
+   | Atalho de teclado, botão, gesto | `src/client/controls.js` |
+   | Destaque de elemento, XPath | `src/client/inspect.js` |
+   | Uma rota nova | `src/server/index.js` |
+   | Um tipo de evento novo | `src/server/watcher.js` **e** `src/client/sse.js` |
+   | O que é ou não um protótipo | `src/server/screens.js` |
+
+3. **Guarde estado em `state.js`**, não num `let` novo no meio do módulo. A exceção é
+   estado de um gesto em andamento, que morre com o gesto.
+4. **Escreva o teste.** Comportamento visível no navegador vira um `check` em
+   `test/e2e.mjs`; função pura vira um teste em `test/unit.mjs`.
+5. **Atualize este arquivo** se a mudança alterou uma decisão ou a estrutura. Cite o nome
+   da constante, não o valor dela.
+6. **Rode `npm run check`.** Lint, tipos e testes precisam passar antes de a tarefa ser
+   dada como concluída.
 
 ## Fora de escopo
 
