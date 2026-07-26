@@ -1,3 +1,9 @@
+## 0.4.1 (2026-07-26)
+
+### Refactor
+
+- Divide o board em módulos e isola as camadas do servidor
+
 ## 0.4.0 (2026-07-26)
 
 ### Feat
