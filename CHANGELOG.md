@@ -1,3 +1,9 @@
+## 0.3.0 (2026-07-26)
+
+### Feat
+
+- Refina modo ponteiro (outline, scroll e blur)
+
 ## 0.2.2 (2026-07-24)
 
 ### Fix
