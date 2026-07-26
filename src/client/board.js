@@ -783,6 +783,29 @@ window.addEventListener('keydown', (event) => {
   else if (event.key === '-') zoomByStep(1 / ZOOM_STEP);
 });
 
+// Segurar Alt ativa o modo ponteiro; soltar volta ao modo anterior.
+let modeBeforeAlt = null;
+
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Alt' || modeBeforeAlt !== null || mode === 'pointer') return;
+  event.preventDefault(); // evita o Alt roubar o foco pro menu do navegador
+  modeBeforeAlt = mode;
+  setMode('pointer');
+});
+
+function releaseAltPointer() {
+  if (modeBeforeAlt === null) return;
+  setMode(modeBeforeAlt);
+  modeBeforeAlt = null;
+}
+
+window.addEventListener('keyup', (event) => {
+  if (event.key === 'Alt') releaseAltPointer();
+});
+
+// Perder o foco da janela solta a tecla sem disparar keyup: nao deixa preso no ponteiro.
+window.addEventListener('blur', releaseAltPointer);
+
 /* ---------- Carga inicial e eventos do servidor ---------- */
 
 async function loadScreens() {

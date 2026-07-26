@@ -192,7 +192,9 @@ foco: o board enquadra e centraliza nela automaticamente.
 
 #### Modo ponteiro
 
-A toolbar alterna entre dois modos. No **pan** (padrão) o cursor é a mão e arrastar move o
+A toolbar alterna entre dois modos, e **segurar `Alt`** ativa o ponteiro enquanto a tecla
+estiver pressionada, voltando ao modo anterior ao soltar (perder o foco da janela também
+solta, para não travar no ponteiro). No **pan** (padrão) o cursor é a mão e arrastar move o
 board. No **ponteiro** o cursor é normal e arrastar com o botão esquerdo não move o board (o
 do meio ainda move); ao passar o mouse sobre um card, o elemento sob o cursor fica em foco e
 os demais daquele card recebem `.pina-dim` (blur). O alvo
