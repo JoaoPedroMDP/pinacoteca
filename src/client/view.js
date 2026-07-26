@@ -8,7 +8,8 @@
 import { canvas, viewport, zoomLabel } from './dom.js';
 import { screens, view } from './state.js';
 import { setCurrent } from './sidebar.js';
-import { clamp } from './utils.js';
+import { assignColumns, clamp, findOverlaps, rectsOverlap } from './utils.js';
+import { clearPositions, loadPositions, savePositions } from './storage.js';
 import {
   CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, GAP,
   MAX_SCALE, MIN_FRAME_WIDTH, MIN_SCALE,
@@ -19,6 +20,9 @@ export function applyTransform() {
   canvas.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
   // Contra-escala dos titulos: cada .card-title usa 1/scale para ficar sempre 16px na tela.
   canvas.style.setProperty('--inv-scale', String(1 / view.scale));
+  // O mesmo zoom, na mao do CSS: e com ele que o titulo limita a largura dele a
+  // do card *na tela*, em vez de crescer junto com a contra-escala (veja board.css).
+  canvas.style.setProperty('--scale', String(view.scale));
   zoomLabel.textContent = `${Math.round(view.scale * 100)}%`;
 }
 
@@ -70,19 +74,45 @@ export function panBy(deltaX, deltaY) {
 }
 
 /**
+ * Caixa de uma tela no canvas. O titulo entra na conta: ele ocupa espaco acima
+ * do frame e e por onde a tela e arrastada.
+ *
+ * @param {import('./state.js').Screen} screen
+ * @returns {import('./utils.js').Rect}
+ */
+function screenRect(screen) {
+  return {
+    x: screen.x,
+    y: screen.y,
+    width: screen.frameWidth,
+    height: CARD_TITLE_HEIGHT + screen.frameHeight,
+  };
+}
+
+/**
  * Caixa que envolve todos os cards, em px de canvas.
- * @returns {{ width: number, height: number } | null} null quando o board esta vazio
+ *
+ * O canto nao e a origem: uma tela arrastada pode ficar em coordenada negativa,
+ * e enquadrar precisa saber onde o conteudo comeca, nao so onde termina.
+ *
+ * @returns {import('./utils.js').Rect | null} null quando o board esta vazio
  */
 function contentBounds() {
   if (screens.size === 0) return null;
 
-  let maxX = 0;
-  let maxY = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
   for (const screen of screens.values()) {
-    maxX = Math.max(maxX, screen.x + screen.frameWidth);
-    maxY = Math.max(maxY, screen.y + CARD_TITLE_HEIGHT + screen.frameHeight);
+    const rect = screenRect(screen);
+    minX = Math.min(minX, rect.x);
+    minY = Math.min(minY, rect.y);
+    maxX = Math.max(maxX, rect.x + rect.width);
+    maxY = Math.max(maxY, rect.y + rect.height);
   }
-  return { width: maxX, height: maxY };
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 /** Enquadra o board inteiro na tela, sem passar de 100%. */
@@ -98,8 +128,8 @@ export function fitToScreen() {
   );
 
   view.scale = clamp(fitScale, MIN_SCALE, MAX_SCALE);
-  view.x = (available.width - bounds.width * view.scale) / 2;
-  view.y = (available.height - bounds.height * view.scale) / 2;
+  view.x = (available.width - bounds.width * view.scale) / 2 - bounds.x * view.scale;
+  view.y = (available.height - bounds.height * view.scale) / 2 - bounds.y * view.scale;
   applyTransform();
 }
 
@@ -131,34 +161,134 @@ export function centerOn(file) {
 }
 
 /**
+ * Escreve a posicao da tela no DOM. Todo movimento de card termina aqui.
+ * @param {import('./state.js').Screen} screen
+ * @param {number} x
+ * @param {number} y
+ */
+function place(screen, x, y) {
+  screen.x = x;
+  screen.y = y;
+  screen.card.style.left = `${x}px`;
+  screen.card.style.top = `${y}px`;
+}
+
+/**
+ * Desce a tela ate ela nao tapar nenhuma tela fixa.
+ *
+ * Uma passada so basta porque os obstaculos vem ordenados por `y` e cada colisao
+ * joga a tela para *abaixo* daquele obstaculo: um obstaculo ja ultrapassado nao
+ * volta a colidir.
+ *
+ * @param {import('./utils.js').Rect} rect caixa da tela na posicao pretendida
+ * @param {import('./utils.js').Rect[]} blockers telas fixas, ordenadas por `y`
+ * @returns {number} o `y` livre
+ */
+function belowPinned(rect, blockers) {
+  let y = rect.y;
+  for (const blocker of blockers) {
+    if (rectsOverlap({ ...rect, y }, blocker)) y = blocker.y + blocker.height + GAP;
+  }
+  return y;
+}
+
+/**
+ * Marca com contorno vermelho toda tela que esta por cima de outra.
+ *
+ * Posicao invalida existe na tela — o usuario pode largar uma tela em cima da
+ * outra —, ela so nunca chega ao localStorage.
+ *
+ * @returns {Set<string>} os arquivos em posicao invalida
+ */
+export function refreshOverlaps() {
+  const invalid = findOverlaps(
+    [...screens.values()].map((screen) => ({ file: screen.file, ...screenRect(screen) })),
+  );
+
+  for (const screen of screens.values()) {
+    screen.card.classList.toggle('is-invalid', invalid.has(screen.file));
+  }
+  return invalid;
+}
+
+/**
+ * Move uma tela para um ponto do canvas. Mover fixa a tela: dali em diante ela
+ * e do usuario, e o layout automatico nao mexe mais nela.
+ *
+ * @param {string} file
+ * @param {number} x
+ * @param {number} y
+ */
+export function moveScreen(file, x, y) {
+  const screen = screens.get(file);
+  if (!screen) return;
+
+  screen.pinned = true;
+  place(screen, x, y);
+  refreshOverlaps();
+}
+
+/**
+ * Grava a organizacao atual. So posicao valida entra: uma tela largada em cima
+ * de outra mantem no localStorage o ultimo lugar valido em que esteve.
+ */
+export function persistPositions() {
+  const invalid = refreshOverlaps();
+  const positions = loadPositions();
+
+  for (const screen of screens.values()) {
+    if (screen.pinned && !invalid.has(screen.file)) {
+      positions[screen.file] = { x: screen.x, y: screen.y };
+    }
+  }
+  savePositions(positions);
+}
+
+/** Esquece a organizacao do usuario e devolve tudo ao layout automatico. */
+export function resetPositions() {
+  clearPositions();
+  for (const screen of screens.values()) screen.pinned = false;
+  layout();
+}
+
+/**
  * Distribui os cards em colunas (`⌈√n⌉`), cada um indo para a coluna mais curta
- * no momento. A largura da coluna e a do card mais largo do board, para que
- * telas estreitas fiquem encostadas em vez de espalhadas por slots de 1280px.
+ * no momento. Cada coluna tem a largura da tela mais larga *dela*: uma tela
+ * desktop no board nao empurra as estreitas para slots de 1280px.
+ *
+ * Telas fixas (`pinned`) ficam onde o usuario deixou; as demais escorrem pelas
+ * colunas desviando delas, para o automatico nunca cair em cima do manual.
  *
  * Chame sempre que um card mudar de tamanho ou uma tela entrar ou sair.
  */
 export function layout() {
-  const files = [...screens.keys()].sort((a, b) => a.localeCompare(b));
-  const columns = Math.max(1, Math.ceil(Math.sqrt(files.length)));
-  const columnHeights = new Array(columns).fill(0);
+  const all = [...screens.values()].sort((a, b) => a.file.localeCompare(b.file));
+  const pinned = all.filter((screen) => screen.pinned);
+  const flowing = all.filter((screen) => !screen.pinned);
 
-  let columnWidth = MIN_FRAME_WIDTH;
-  for (const screen of screens.values()) columnWidth = Math.max(columnWidth, screen.frameWidth);
+  // Tela fixa tambem passa pelo DOM: e a carga inicial que a coloca no lugar.
+  for (const screen of pinned) place(screen, screen.x, screen.y);
+  const blockers = pinned.map(screenRect).sort((a, b) => a.y - b.y);
 
-  for (const file of files) {
-    const screen = screens.get(file);
-    if (!screen) continue;
+  const columns = assignColumns(
+    flowing.map((screen) => CARD_TITLE_HEIGHT + screen.frameHeight + GAP),
+    Math.ceil(Math.sqrt(flowing.length)),
+  );
 
-    let target = 0;
-    for (let i = 1; i < columns; i += 1) {
-      if (columnHeights[i] < columnHeights[target]) target = i;
+  let x = 0;
+  for (const column of columns) {
+    let columnWidth = MIN_FRAME_WIDTH;
+    for (const index of column) columnWidth = Math.max(columnWidth, flowing[index].frameWidth);
+
+    let y = 0;
+    for (const index of column) {
+      const screen = flowing[index];
+      y = belowPinned({ ...screenRect(screen), x, y }, blockers);
+      place(screen, x, y);
+      y += CARD_TITLE_HEIGHT + screen.frameHeight + GAP;
     }
-
-    screen.x = target * (columnWidth + GAP);
-    screen.y = columnHeights[target];
-    screen.card.style.left = `${screen.x}px`;
-    screen.card.style.top = `${screen.y}px`;
-
-    columnHeights[target] += CARD_TITLE_HEIGHT + screen.frameHeight + GAP;
+    x += columnWidth + GAP;
   }
+
+  refreshOverlaps();
 }

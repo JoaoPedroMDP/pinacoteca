@@ -7,6 +7,7 @@
   --text: #e6e8ec;
   --text-muted: #8b93a1;
   --accent: #6ea8fe;
+  --danger: #e0645f;
   --card-bg: #ffffff;
   --sidebar-width: 240px;
 }
@@ -239,9 +240,7 @@ body {
 }
 
 .card-title {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  display: block;
   padding: 0 2px;
   color: var(--text-muted);
   font-size: 16px;
@@ -254,6 +253,19 @@ body {
    * dar zoom out. Contra-escalar por 1/scale (--inv-scale, ajustado no applyTransform)
    * mantem so a *fonte* em 16px reais na tela, ancorada na base (topo do frame).
    *
+   * A largura precisa da correcao inversa: a contra-escala multiplica a *caixa*
+   * junto com a fonte, e uma caixa de `100%` viraria a largura do card em px de
+   * *tela* — no zoom afastado, varias vezes o card desenhado, tapando os vizinhos
+   * e roubando o clique deles (era o titulo do vizinho que arrastava a tela errada).
+   * Medir a largura em `100% * scale` desfaz isso: contra-escalada, a caixa volta a
+   * ter exatamente a largura do card na tela, em qualquer zoom. O preco e o nome
+   * truncar quando o zoom aperta — o completo fica no tooltip do card.
+   */
+  width: calc(100% * var(--scale, 1));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /*
    * O espaco ate o card e um `margin-bottom` (layout, em px de canvas), fora do
    * transform: ele escala junto com o board, entao a distancia entre titulo e tela
    * encolhe no zoom out. Se fosse padding aqui dentro, seria contra-escalado e viraria
@@ -262,10 +274,22 @@ body {
   margin-bottom: 8px;
   transform: scale(var(--inv-scale, 1));
   transform-origin: 0 100%;
+  /* O titulo e a alca: arrastar por ele reorganiza a tela no canvas. */
+  cursor: move;
+  user-select: none;
+}
+
+#viewport.is-dragging .card-title {
+  cursor: grabbing;
 }
 
 .card.is-interactive .card-title {
   color: var(--accent);
+}
+
+/* Tela por cima de outra: posicao existe na tela, mas nao e salva. */
+.card.is-invalid .card-title {
+  color: var(--danger);
 }
 
 /*
@@ -284,6 +308,11 @@ body {
 
 .card.is-interactive .card-frame {
   outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.card.is-invalid .card-frame {
+  outline: 2px solid var(--danger);
   outline-offset: 2px;
 }
 

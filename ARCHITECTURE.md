@@ -5,8 +5,11 @@
 **pinacoteca** — visualizador de protótipos HTML. Roda em uma pasta, encontra todos os
 `.html` dela e mostra todos lado a lado num board com zoom e pan.
 
-É **somente leitura**. Não edita, não salva, não gera arquivo. O único trabalho da
-ferramenta é mostrar o estado atual do disco, sempre atualizado.
+É **somente leitura sobre a pasta observada**: não edita, não cria e não apaga arquivo
+nenhum lá dentro. O único trabalho da ferramenta é mostrar o estado atual do disco,
+sempre atualizado. A única coisa que ela lembra é como o usuário organizou as telas no
+canvas, e isso vive no `localStorage` do navegador — não em arquivo (veja
+"Organização das telas").
 
 Caso de uso: o usuário deixa o board aberto em um segundo monitor enquanto um agente
 gera e reescreve os HTMLs. As telas se atualizam sozinhas, sem F5, sem clicar em nada.
@@ -155,7 +158,8 @@ Sem framework e sem bundler, mas dividido em módulos ES nativos. `index.html` c
 | `src/client/constants.js` | todos os números ajustáveis do board |
 | `src/client/utils.js` | funções puras: sem DOM, sem estado |
 | `src/client/dom.js` | as referências aos elementos de `index.html` |
-| `src/client/state.js` | **todo** o estado mutável: telas, zoom/pan, modo |
+| `src/client/state.js` | **todo** o estado mutável: telas, zoom/pan, modo, raiz observada |
+| `src/client/storage.js` | organização das telas no `localStorage` |
 | `src/client/view.js` | câmera: zoom, pan e layout dos cards |
 | `src/client/cards.js` | criação, recarga e medida de cada tela |
 | `src/client/sidebar.js` | árvore de telas por pasta |
@@ -185,7 +189,13 @@ Duas regras seguram essa divisão:
 - **Board** — plano com zoom e pan. Cada tela é um card com título e um `iframe` dentro.
   O título é contra-escalado por `1/scale` (via a variável CSS `--inv-scale`, ajustada no
   `applyTransform`, com `transform-origin` na base): fica sempre 16px reais na tela, legível
-  em qualquer nível de zoom, ancorado logo acima do frame.
+  em qualquer nível de zoom, ancorado logo acima do frame. A **largura** dele leva a
+  correção inversa — `calc(100% * var(--scale))` —, porque a contra-escala multiplica a
+  caixa junto com a fonte: com `100%`, a caixa passaria a medir a largura do card em px de
+  *tela* e, no zoom afastado, taparia os cards vizinhos e roubaria o clique deles (o título
+  é a alça de arrasto, então isso arrastava a tela errada). Medida em `100% * scale`, a
+  caixa contra-escalada volta a ter exatamente a largura do card desenhado, em qualquer
+  zoom; o nome trunca com reticências quando o espaço aperta e o completo fica no `title`.
 - **Cliente SSE** — assina `/events` e aplica os eventos no DOM.
 - **Map de assets** — `tela → recursos carregados`, lido de cada iframe a cada `load`.
   Um evento `asset` recarrega apenas as telas cujo conjunto contém aquele arquivo.
@@ -217,9 +227,43 @@ iframes — assim o conteúdo não sofre reflow ao dar zoom, e o resultado é o 
 de canvas que se espera.
 
 Os cards são distribuídos em colunas (`⌈√n⌉`), cada um indo para a coluna mais curta no
-momento. A largura da coluna é a do card mais largo do board, para que telas estreitas
-fiquem encostadas em vez de espalhadas por slots de 1280px. O layout é recalculado quando
-um card muda de largura ou altura, ou quando uma tela entra ou sai.
+momento. Cada coluna tem a largura da tela mais larga **dela**, não a do card mais largo do
+board: uma única tela desktop não espalha as estreitas por slots de 1280px. Daí a
+distribuição (`assignColumns`, em `utils.js`) vir antes do posicionamento — a largura de uma
+coluna só existe depois de se saber quem caiu nela. O layout é recalculado quando um card
+muda de largura ou altura, ou quando uma tela entra ou sai.
+
+#### Organização das telas
+
+Arrastar o **título** de um card move a tela pelo canvas. O título é a alça porque é a
+única parte do card que não disputa gesto com nada: o pan, o duplo clique de interação,
+o Alt+clique de XPath e o modo ponteiro nascem todos sobre o frame.
+
+Uma tela movida vira **fixa** (`pinned`): o layout automático não mexe mais nela, e as
+telas ainda automáticas escorrem pelas colunas *desviando* das fixas — descem até caber
+abaixo do obstáculo. Sem isso o automático cairia em cima do manual a cada recarga de
+card. O botão **Reorganizar** desfixa tudo e volta ao layout em colunas.
+
+**Sobreposição é posição inválida.** Depois de cada movimento o board compara as caixas
+de todas as telas (o título conta na altura, porque ocupa espaço acima do frame) e marca
+com contorno vermelho as que estão em cima de outra. Encostar não conta: o teste é
+estrito, então dois cards colados lado a lado continuam válidos.
+
+O usuário *pode* largar uma tela em cima de outra — o card fica lá, vermelho —, mas essa
+posição nunca é gravada: a tela mantém no armazenamento o último lugar válido em que
+esteve, e é para lá que ela volta no próximo carregamento. Gravar posição inválida seria
+persistir um estado que o board não sabe desenhar direito.
+
+A organização vive no `localStorage`, não em arquivo: a ferramenta é somente leitura
+sobre a pasta observada, e gerar um arquivo de layout dentro da pasta dos protótipos
+sujaria o diretório de trabalho do usuário. A chave leva a **raiz observada** — o mesmo
+navegador abre boards de pastas diferentes, e a organização de uma não tem nada a ver com
+a da outra. Toda leitura e escrita tolera falha (modo privado, JSON estragado): o pior
+caso é o board voltar ao layout automático, nunca quebrar.
+
+Limite conhecido: uma tela fixa pode virar inválida sozinha, quando o conteúdo dela cresce
+e o card passa a invadir o vizinho. Ela fica vermelha, mas a posição já gravada continua
+gravada — ela era válida quando foi salva.
 
 #### Escudo sobre o iframe
 
@@ -374,6 +418,7 @@ segredos a qualquer página aberta no mesmo navegador.
    | --- | --- |
    | Um número (tamanho, prazo, limite) | `src/client/constants.js` |
    | Zoom, pan, posição dos cards | `src/client/view.js` |
+   | O que o board lembra entre sessões | `src/client/storage.js` |
    | O que um card mostra ou mede | `src/client/cards.js` |
    | Atalho de teclado, botão, gesto | `src/client/controls.js` |
    | Destaque de elemento, XPath | `src/client/inspect.js` |

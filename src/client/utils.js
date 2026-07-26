@@ -31,6 +31,79 @@ export function previewUrl(file) {
 }
 
 /**
+ * Caixa de uma tela no canvas, em px de canvas.
+ * @typedef {{ x: number, y: number, width: number, height: number }} Rect
+ */
+
+/**
+ * Duas caixas se sobrepoem?
+ *
+ * O limite e estrito: encostar nao conta. Dois cards colados lado a lado
+ * continuam validos — sobreposicao e uma tela *tapando* a outra.
+ *
+ * @param {Rect} a
+ * @param {Rect} b
+ * @returns {boolean}
+ */
+export function rectsOverlap(a, b) {
+  return a.x < b.x + b.width
+    && b.x < a.x + a.width
+    && a.y < b.y + b.height
+    && b.y < a.y + a.height;
+}
+
+/**
+ * Quais telas estao por cima de alguma outra. Sobreposicao e mutua: as duas
+ * telas envolvidas entram no conjunto, porque as duas estao em posicao invalida.
+ *
+ * @param {Array<Rect & { file: string }>} boxes
+ * @returns {Set<string>} os arquivos em posicao invalida
+ */
+export function findOverlaps(boxes) {
+  /** @type {Set<string>} */
+  const invalid = new Set();
+
+  for (let i = 0; i < boxes.length; i += 1) {
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      if (!rectsOverlap(boxes[i], boxes[j])) continue;
+      invalid.add(boxes[i].file);
+      invalid.add(boxes[j].file);
+    }
+  }
+  return invalid;
+}
+
+/**
+ * Reparte itens entre `columns` colunas, cada item indo para a coluna mais curta
+ * no momento. So distribui: quem chama e que sabe posicionar.
+ *
+ * Separado do posicionamento de proposito — assim a coluna de cada tela e
+ * decidida *antes* de se saber a largura de cada coluna, que sai justamente das
+ * telas que cairam nela.
+ *
+ * @param {number[]} heights altura de cada item, na ordem em que devem entrar
+ * @param {number} columns quantas colunas; menos de uma vira uma
+ * @returns {number[][]} os indices de `heights` em cada coluna, em ordem
+ */
+export function assignColumns(heights, columns) {
+  const total = Math.max(1, columns);
+  /** @type {number[][]} */
+  const buckets = Array.from({ length: total }, () => []);
+  const filled = new Array(total).fill(0);
+
+  heights.forEach((height, index) => {
+    let target = 0;
+    for (let i = 1; i < total; i += 1) {
+      if (filled[i] < filled[target]) target = i;
+    }
+    buckets[target].push(index);
+    filled[target] += height;
+  });
+
+  return buckets;
+}
+
+/**
  * XPath absoluto do elemento; usa @id quando existe (mais curto e estavel).
  * @param {Element} el
  * @returns {string}

@@ -36,6 +36,8 @@ Encontra todos os `.html` recursivamente, monta um card por tela e abre o navega
 | Interagir com um protótipo | Duplo clique no card |
 | Sair do modo de interação | `Esc`, ou clicar fora |
 | Centralizar uma tela | Clicar nela na barra lateral |
+| Reorganizar as telas | Arrastar o card pelo título |
+| Voltar ao layout automático | Botão `Reorganizar` |
 
 Por padrão os cards não recebem cliques — é isso que deixa o scroll e o arrasto
 pertencerem ao board. O duplo clique libera um card por vez para você clicar em botões,
@@ -53,10 +55,25 @@ a cada iframe quais recursos ele de fato carregou (`performance.getEntriesByType
 acerta `@import` encadeado, imagem referenciada de dentro do CSS e asset injetado por JS
 em runtime — casos em que um parser erraria.
 
+## Organização das telas
+
+Arraste um card pelo título para colocá-lo onde quiser no canvas. A organização fica
+salva e volta igual no próximo `npx pinacoteca` — por pasta, para cada projeto ter a sua.
+O título nunca passa da largura do próprio card: em zoom bem afastado o nome trunca, e o
+completo aparece no hover.
+
+Telas não podem ficar uma em cima da outra: você até consegue largar um card sobre outro,
+mas ele fica com **contorno vermelho** e essa posição não é salva. No próximo
+carregamento a tela volta para o último lugar válido em que esteve.
+
+O botão `Reorganizar` esquece tudo e devolve as telas ao layout automático em colunas.
+
 ## Escopo
 
-É **somente leitura**. Pinacoteca não edita, não cria e não apaga arquivo nenhum. O
-único trabalho dela é mostrar o que já está no disco, sempre atualizado.
+É **somente leitura**. Pinacoteca não edita, não cria e não apaga arquivo nenhum na pasta
+observada. O único trabalho dela é mostrar o que já está no disco, sempre atualizado — a
+organização das telas é a única coisa que ela guarda, e fica no `localStorage` do
+navegador, não em arquivo.
 
 O servidor escuta apenas em `127.0.0.1` e recusa qualquer caminho fora da pasta indicada,
 além de arquivos e pastas ocultos (`.env`, `.git/`) e diretórios de build.

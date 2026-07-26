@@ -16,7 +16,10 @@ import path from 'node:path';
 import { parseArgs, DEFAULT_PORT } from '../src/cli.js';
 import { mimeTypeFor, resolveInside } from '../src/server/http.js';
 import { isForbiddenPreviewPath, isHtmlFile, isIgnoredDir, listScreens } from '../src/server/screens.js';
-import { buildTree, clamp, computeXPath, encodePath, previewUrl, sortNames } from '../src/client/utils.js';
+import {
+  assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
+  previewUrl, rectsOverlap, sortNames,
+} from '../src/client/utils.js';
 
 /* ---------- cli.js ---------- */
 
@@ -173,6 +176,57 @@ test('buildTree agrupa por pasta e guarda o caminho de cada nivel', () => {
   assert.ok(admin);
   assert.equal(admin.path, 'telas/admin');
   assert.deepEqual(admin.files, ['telas/admin/painel.html']);
+});
+
+/* ---------- Colunas do layout ---------- */
+
+test('assignColumns manda cada item para a coluna mais curta', () => {
+  assert.deepEqual(assignColumns([100, 100, 300, 100], 2), [[0, 2], [1, 3]]);
+});
+
+test('assignColumns preserva a ordem dentro da coluna', () => {
+  assert.deepEqual(assignColumns([10, 10, 10, 10], 1), [[0, 1, 2, 3]]);
+});
+
+test('assignColumns nunca devolve menos de uma coluna', () => {
+  assert.deepEqual(assignColumns([10], 0), [[0]]);
+  assert.deepEqual(assignColumns([10], -3), [[0]]);
+});
+
+test('assignColumns aceita board vazio', () => {
+  assert.deepEqual(assignColumns([], 3), [[], [], []]);
+});
+
+/* ---------- Sobreposicao de telas ---------- */
+
+test('rectsOverlap pega tela em cima de tela', () => {
+  const a = { x: 0, y: 0, width: 100, height: 100 };
+  assert.equal(rectsOverlap(a, { x: 50, y: 50, width: 100, height: 100 }), true);
+  assert.equal(rectsOverlap(a, { x: 10, y: 10, width: 10, height: 10 }), true, 'uma dentro da outra');
+});
+
+test('rectsOverlap deixa telas encostadas passarem', () => {
+  const a = { x: 0, y: 0, width: 100, height: 100 };
+  assert.equal(rectsOverlap(a, { x: 100, y: 0, width: 100, height: 100 }), false, 'lado a lado');
+  assert.equal(rectsOverlap(a, { x: 0, y: 100, width: 100, height: 100 }), false, 'uma sob a outra');
+  assert.equal(rectsOverlap(a, { x: 200, y: 200, width: 10, height: 10 }), false, 'longe');
+});
+
+test('findOverlaps marca as duas telas envolvidas e ignora as demais', () => {
+  const invalid = findOverlaps([
+    { file: 'a.html', x: 0, y: 0, width: 100, height: 100 },
+    { file: 'b.html', x: 50, y: 50, width: 100, height: 100 },
+    { file: 'c.html', x: 400, y: 0, width: 100, height: 100 },
+  ]);
+
+  assert.deepEqual([...invalid].sort(), ['a.html', 'b.html']);
+});
+
+test('findOverlaps devolve conjunto vazio quando esta tudo valido', () => {
+  assert.equal(findOverlaps([
+    { file: 'a.html', x: 0, y: 0, width: 100, height: 100 },
+    { file: 'b.html', x: 172, y: 0, width: 100, height: 100 },
+  ]).size, 0);
 });
 
 /* ---------- computeXPath ---------- */

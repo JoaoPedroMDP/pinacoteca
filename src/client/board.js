@@ -8,6 +8,7 @@
 //   utils.js      funcoes puras (sem DOM, sem estado)
 //   dom.js        referencias aos elementos de index.html
 //   state.js      estado mutavel: telas, zoom/pan, modo
+//   storage.js    organizacao das telas, no localStorage
 //   view.js       camera: zoom, pan e layout dos cards
 //   cards.js      criacao, recarga e medida de cada tela
 //   sidebar.js    arvore de telas por pasta
@@ -17,6 +18,7 @@
 //   sse.js        eventos do servidor
 
 import { rootPath, version } from './dom.js';
+import { source } from './state.js';
 import { createCard } from './cards.js';
 import { renderSidebar } from './sidebar.js';
 import { applyTransform, fitToScreen, layout } from './view.js';
@@ -37,6 +39,10 @@ async function loadScreens() {
   rootPath.textContent = data.root;
   rootPath.title = data.root;
   if (data.version) version.textContent = `v${data.version}`;
+
+  // Antes de montar card nenhum: e a raiz que diz qual organizacao salva e desta
+  // pasta, e `createCard` ja consulta essa organizacao.
+  source.root = data.root;
 
   for (const file of data.screens) createCard(file);
   renderSidebar();

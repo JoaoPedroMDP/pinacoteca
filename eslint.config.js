@@ -21,6 +21,7 @@ const BROWSER_GLOBALS = {
   document: 'readonly',
   location: 'readonly',
   navigator: 'readonly',
+  localStorage: 'readonly',
   fetch: 'readonly',
   EventSource: 'readonly',
   Element: 'readonly',

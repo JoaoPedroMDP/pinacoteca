@@ -11,6 +11,7 @@ import { clamp, previewUrl } from './utils.js';
 import { centerOn, layout } from './view.js';
 import { setCurrent } from './sidebar.js';
 import { clearHoverHighlight, copyXPathAt, injectInspectStyle, onInspectMove } from './inspect.js';
+import { savedPosition } from './storage.js';
 import {
   CARD_WIDTH, DEFAULT_FRAME_HEIGHT, LATE_ASSET_SCAN_MS,
   MAX_FRAME_HEIGHT, MIN_FRAME_HEIGHT, MIN_FRAME_WIDTH,
@@ -141,11 +142,15 @@ function resizeToContent(screen) {
 export function createCard(file) {
   const card = document.createElement('article');
   card.className = 'card';
+  card.dataset.file = file; // e por aqui que o arrasto sabe qual tela ele pegou
   card.style.width = `${CARD_WIDTH}px`; // largura inicial; ajustada ao conteudo no load
 
   const title = document.createElement('header');
   title.className = 'card-title';
   title.textContent = file;
+  // No zoom afastado o rotulo trunca (veja `.card-title` em board.css); o nome
+  // inteiro continua alcancavel pelo hover.
+  title.title = file;
 
   const frame = document.createElement('div');
   frame.className = 'card-frame';
@@ -178,14 +183,18 @@ export function createCard(file) {
   item.textContent = file.slice(file.lastIndexOf('/') + 1);
   item.addEventListener('click', () => centerOn(file));
 
+  // A tela volta para onde o usuario a deixou da ultima vez, se ja a moveu.
+  const saved = savedPosition(file);
+
   /** @type {Screen} */
   const screen = {
     file, card, frame, iframe, item,
     assets: new Set(),
     frameWidth: CARD_WIDTH,
     frameHeight: DEFAULT_FRAME_HEIGHT,
-    x: 0,
-    y: 0,
+    x: saved?.x ?? 0,
+    y: saved?.y ?? 0,
+    pinned: saved !== null,
     pendingScroll: 0,
     lateScan: null,
   };

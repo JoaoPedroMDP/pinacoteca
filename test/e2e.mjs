@@ -172,6 +172,131 @@ await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: '
 await checkEventually('Esc devolve o controle ao board',
   () => board.evaluate("document.querySelectorAll('.card.is-interactive').length === 0"));
 
+/* ---------- Reorganizacao das telas ---------- */
+
+// Arrasto do titulo com os mesmos eventos que o navegador mandaria. `dxExpr` e
+// `dyExpr` sao avaliados na pagina, com `box` (a caixa do card na tela) e
+// `other(arquivo)` a disposicao — assim o alvo do arrasto e calculado a partir
+// do que esta desenhado, sem depender do zoom em que o board parou.
+/** @type {(file: string, dxExpr: string, dyExpr: string) => string} */
+const dragTitle = (file, dxExpr, dyExpr) => `(() => {
+  const cards = [...document.querySelectorAll('.card')];
+  const card = cards.find((c) => c.dataset.file === ${JSON.stringify(file)});
+  const other = (name) => cards.find((c) => c.dataset.file === name).getBoundingClientRect();
+  const box = card.getBoundingClientRect();
+  const dx = ${dxExpr};
+  const dy = ${dyExpr};
+
+  const title = card.querySelector('.card-title');
+  const handle = title.getBoundingClientRect();
+  const x = handle.left + 8;
+  const y = handle.top + handle.height / 2;
+  const at = (clientX, clientY) => ({
+    pointerId: 9, button: 0, bubbles: true, cancelable: true, clientX, clientY,
+  });
+
+  title.dispatchEvent(new PointerEvent('pointerdown', at(x, y)));
+  title.dispatchEvent(new PointerEvent('pointermove', at(x + dx, y + dy)));
+  title.dispatchEvent(new PointerEvent('pointerup', at(x + dx, y + dy)));
+
+  return { left: card.style.left, top: card.style.top, invalid: card.classList.contains('is-invalid') };
+})()`;
+
+/** A organizacao salva no navegador, ja decodificada. */
+const stored = async () => JSON.parse(await board.evaluate(`(() => {
+  const key = Object.keys(localStorage).find((k) => k.startsWith('pinacoteca:positions:'));
+  return JSON.stringify(key ? JSON.parse(localStorage.getItem(key)) : null);
+})()`));
+
+process.stdout.write('\nReorganizacao das telas\n');
+
+const moved = await board.evaluate(dragTitle('login.html', 'box.width * 3', '0'));
+check('arrastar o titulo move o card', moved.left !== '0px', `left=${moved.left}`);
+check('posicao livre nao fica marcada como invalida', moved.invalid === false);
+
+const afterMove = await stored();
+check('posicao valida vai para o localStorage',
+  afterMove?.['login.html']?.x === Number.parseFloat(moved.left),
+  JSON.stringify(afterMove));
+
+const dropped = await board.evaluate(
+  dragTitle('login.html', "other('dashboard.html').left - box.left + 10", "other('dashboard.html').top - box.top + 10"),
+);
+check('tela largada em cima de outra fica com contorno vermelho', dropped.invalid === true);
+check('posicao invalida nao e salva',
+  (await stored())?.['login.html']?.x === afterMove?.['login.html']?.x);
+
+await board.evaluate("document.querySelector('[data-action=\"rearrange\"]').click()");
+check('Reorganizar apaga a organizacao salva', (await stored()) === null);
+check('Reorganizar desfaz a sobreposicao',
+  (await board.evaluate("document.querySelectorAll('.card.is-invalid').length")) === 0);
+
+/* ---------- Titulo e colunas no zoom afastado ---------- */
+
+// Duas telas estreitas e altas entram no board ao lado das largas: e a mistura
+// de larguras que revela o layout por coluna, e o zoom que o `Enquadrar` escolhe
+// para caber tudo e o que revela a caixa do titulo.
+const MOBILE = `<!doctype html><meta charset=utf-8>
+<style>body{margin:0}div{width:300px;height:1800px;background:#cfe;margin:0 auto}</style><div></div>`;
+
+fixture.write('a-mobile-1.html', MOBILE);
+fixture.write('a-mobile-2.html', MOBILE);
+
+process.stdout.write('\nTitulo e colunas no zoom afastado\n');
+
+// As duas precisam ter chegado *e* medido: `every` sobre lista vazia passaria
+// antes das telas existirem, e o resto da secao testaria o board antigo.
+await checkEventually('telas estreitas entram medindo a propria largura', () => board.evaluate(`(() => {
+  const narrow = [...document.querySelectorAll('.card')].filter((c) => c.dataset.file.startsWith('a-mobile'));
+  return narrow.length === 2 && narrow.every((c) => c.style.width === '300px');
+})()`));
+
+// Uma coluna nunca reserva mais espaco do que a sua tela mais larga: a coluna
+// seguinte comeca no fim da anterior + GAP.
+/** @type {() => Promise<{ xs: number[], widths: number[] }>} */
+const columnLayout = async () => JSON.parse(await board.evaluate(`(() => {
+  const widthByX = new Map();
+  for (const card of document.querySelectorAll('.card')) {
+    const x = Math.round(card.offsetLeft);
+    widthByX.set(x, Math.max(widthByX.get(x) ?? 0, card.offsetWidth));
+  }
+  const xs = [...widthByX.keys()].sort((a, b) => a - b);
+  return JSON.stringify({ xs, widths: xs.map((x) => widthByX.get(x)) });
+})()`));
+
+const { xs, widths } = await columnLayout();
+const GAP = 72;
+check('coluna estreita nao herda a largura da tela desktop',
+  xs.length > 1 && xs.every((x, i) => i === 0 || x - xs[i - 1] === widths[i - 1] + GAP),
+  `x=${xs.join(',')} larguras=${widths.join(',')}`);
+
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' }))");
+
+// A caixa do titulo e a alca de arrasto. Se ela passar da largura do card na
+// tela, tapa o vizinho e rouba o clique dele — era o bug do titulo largo.
+/** @type {() => Promise<Array<{ file: string, excess: number, owner: string | null }>>} */
+const titleBoxes = async () => JSON.parse(await board.evaluate(`(() => {
+  const cards = [...document.querySelectorAll('.card')];
+  return JSON.stringify(cards.map((card) => {
+    const box = card.querySelector('.card-title').getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return {
+      file: card.dataset.file,
+      excess: Math.round(box.width - card.getBoundingClientRect().width),
+      owner: hit?.closest('.card')?.dataset.file ?? null,
+    };
+  }));
+})()`));
+
+const boxes = await titleBoxes();
+const widest = boxes.reduce((worst, box) => (box.excess > worst.excess ? box : worst));
+check('titulo nao passa da largura do card na tela', widest.excess <= 1,
+  `${widest.file} sobra ${widest.excess}px`);
+
+const stolen = boxes.filter((box) => box.owner !== box.file);
+check('clique em cima do titulo pega a propria tela', stolen.length === 0,
+  stolen.map((box) => `${box.file} -> ${box.owner}`).join(' | '));
+
 /* ---------- Servidor ---------- */
 
 process.stdout.write('\nServidor\n');

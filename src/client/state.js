@@ -18,8 +18,10 @@
  * @property {Set<string>} assets recursos que o iframe de fato buscou
  * @property {number} frameWidth largura medida do conteudo, em px de canvas
  * @property {number} frameHeight altura medida do conteudo, em px de canvas
- * @property {number} x posicao no canvas, definida pelo layout
- * @property {number} y posicao no canvas, definida pelo layout
+ * @property {number} x posicao no canvas, definida pelo layout ou pelo arrasto
+ * @property {number} y posicao no canvas, definida pelo layout ou pelo arrasto
+ * @property {boolean} pinned true quando a posicao veio do usuario (arrasto ou
+ *   localStorage). Tela fixa nao e movida pelo layout automatico.
  * @property {number} pendingScroll scroll interno a restaurar apos recarregar
  * @property {ReturnType<typeof setTimeout> | null} lateScan segunda passada de assets
  */
@@ -34,6 +36,14 @@ export const screens = new Map();
 /** Pastas colapsadas na sidebar. Persiste entre re-renders de add/remove.
  * @type {Set<string>} */
 export const collapsedDirs = new Set();
+
+/**
+ * De onde este board le. `root` e a pasta observada, preenchida na carga a
+ * partir de `/api/screens`; e ela que identifica o board no localStorage, senao
+ * duas pastas abertas no mesmo navegador embaralhariam as posicoes salvas.
+ * @type {{ root: string }}
+ */
+export const source = { root: '' };
 
 /**
  * Zoom e pan do canvas. Aplicado por `view.applyTransform`.

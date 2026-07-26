@@ -45,7 +45,7 @@ export async function waitFor(predicate, { timeout = DEFAULT_TIMEOUT_MS, interva
   }
 }
 
-/* ---------- Asercoes ---------- */
+/* ---------- Assercoes ---------- */
 
 /** @type {string[]} */
 const failures = [];

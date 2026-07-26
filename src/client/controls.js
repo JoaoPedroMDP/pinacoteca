@@ -5,9 +5,10 @@
 // gesto* — do prototipo, do modo ponteiro ou do board — e so entao age.
 
 import { toolbar, viewport } from './dom.js';
-import { ui, view } from './state.js';
+import { screens, ui, view } from './state.js';
 import {
-  applyTransform, fitToScreen, panBy, resetZoom, zoomAt, zoomByStep,
+  applyTransform, fitToScreen, moveScreen, panBy, persistPositions,
+  resetPositions, resetZoom, zoomAt, zoomByStep,
 } from './view.js';
 import { setInteractive } from './cards.js';
 import { adjustInspectLevel, clearHoverHighlight, hasHoverTarget } from './inspect.js';
@@ -75,6 +76,29 @@ viewport.addEventListener('wheel', (event) => {
   }
 }, { passive: false });
 
+/**
+ * O ponto do canvas que esta sob o cursor, desfazendo o pan e o zoom.
+ * @param {PointerEvent} event
+ * @returns {{ x: number, y: number }} em px de canvas
+ */
+function canvasPoint(event) {
+  const rect = viewport.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left - view.x) / view.scale,
+    y: (event.clientY - rect.top - view.y) / view.scale,
+  };
+}
+
+/**
+ * A alca de arrasto de uma tela e o titulo dela.
+ * @param {Event} event
+ * @returns {string | null} o arquivo da tela, ou null se o gesto nasceu fora
+ */
+function draggedFile(event) {
+  const title = /** @type {Element | null} */ (event.target)?.closest?.('.card-title');
+  return title?.parentElement?.dataset.file ?? null;
+}
+
 /* ---------- Arrasto: pan do board ---------- */
 
 /** @type {number | null} */
@@ -90,6 +114,8 @@ viewport.addEventListener('pointerdown', (event) => {
   // No modo ponteiro o arrasto com o esquerdo nao move o board (o do meio move).
   if (ui.mode === 'pointer' && event.button === 0) return;
   if (isInsideInteractiveCard(event)) return;
+  // O titulo e a alca de arrasto da tela: ali o gesto move o card, nao o board.
+  if (draggedFile(event)) return;
   // A toolbar fica dentro do viewport: sem isto o setPointerCapture abaixo
   // redirecionaria o clique para o viewport e os botoes nunca disparariam.
   if (/** @type {Element} */ (event.target).closest?.('.toolbar')) return;
@@ -118,6 +144,62 @@ function endPan(event) {
 viewport.addEventListener('pointerup', endPan);
 viewport.addEventListener('pointercancel', endPan);
 
+/* ---------- Arrasto do titulo: reorganizar as telas ---------- */
+
+// Estado do gesto em andamento: nasce no pointerdown e morre no pointerup.
+/** @type {number | null} */
+let dragPointerId = null;
+let dragFile = '';
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+
+viewport.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.altKey) return;
+
+  const file = draggedFile(event);
+  const screen = file ? screens.get(file) : null;
+  if (!file || !screen) return;
+
+  event.preventDefault(); // senao o arrasto vira selecao do texto do titulo
+
+  const point = canvasPoint(event);
+  dragPointerId = event.pointerId;
+  dragFile = file;
+  // Guardar onde dentro do card o cursor pegou: sem isso a tela pularia para
+  // ficar com o canto embaixo do cursor no primeiro movimento.
+  dragOffsetX = point.x - screen.x;
+  dragOffsetY = point.y - screen.y;
+
+  viewport.classList.add('is-dragging');
+  try {
+    viewport.setPointerCapture(event.pointerId);
+  } catch {
+    // Ponteiro sintetico (teste) nao existe para o navegador capturar. Os
+    // listeners de move/up no viewport dao conta do gesto do mesmo jeito.
+  }
+});
+
+viewport.addEventListener('pointermove', (event) => {
+  if (event.pointerId !== dragPointerId) return;
+
+  const point = canvasPoint(event);
+  moveScreen(dragFile, Math.round(point.x - dragOffsetX), Math.round(point.y - dragOffsetY));
+});
+
+/** Fim do arrasto: e aqui que a organizacao vira estado salvo. */
+/** @param {PointerEvent} event */
+function endDrag(event) {
+  if (event.pointerId !== dragPointerId) return;
+
+  dragPointerId = null;
+  viewport.classList.remove('is-dragging');
+  // Posicao invalida (tela em cima de outra) fica na tela, mas nao e salva.
+  persistPositions();
+}
+
+viewport.addEventListener('pointerup', endDrag);
+viewport.addEventListener('pointercancel', endDrag);
+
 // Clique no vazio sai do modo de interacao.
 viewport.addEventListener('click', (event) => {
   if (ui.interactiveFile && !isInsideInteractiveCard(event)) setInteractive(null);
@@ -132,6 +214,7 @@ toolbar.addEventListener('click', (event) => {
   else if (action === 'zoom-out') zoomByStep(1 / ZOOM_STEP);
   else if (action === 'zoom-reset') resetZoom();
   else if (action === 'fit') fitToScreen();
+  else if (action === 'rearrange') resetPositions();
   else if (action === 'toggle-mode') setMode(ui.mode === 'pointer' ? 'pan' : 'pointer');
 });
 

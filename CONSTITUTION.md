@@ -10,3 +10,6 @@
 7. Não invente estrutura nova sem necessidade: arquivo novo só quando o
    existente passou a fazer duas coisas. Antes de criar, leia a seção
    "Como adicionar uma feature" do ARCHITECTURE.md e siga o módulo indicado
+8. Lembre o usuário de commitar depois que uma tarefa for concluída.
+9. Quando for gerar mensagens de commit, não ultrapasse 50 palavras. 
+   Não precisamos explicar as alterações na mensagem.
