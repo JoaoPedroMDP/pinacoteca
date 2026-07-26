@@ -1,3 +1,9 @@
+## 0.4.0 (2026-07-26)
+
+### Feat
+
+- Segurar tecla Alt mantém o modo ponteiro ativado
+
 ## 0.3.0 (2026-07-26)
 
 ### Feat
