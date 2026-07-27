@@ -12,7 +12,19 @@ import {
 } from './view.js';
 import { setInteractive } from './cards.js';
 import { adjustInspectLevel, clearHoverHighlight, hasHoverTarget } from './inspect.js';
+import { saveSnapToGrid } from './storage.js';
 import { WHEEL_STEP, WHEEL_ZOOM_DAMPING, ZOOM_STEP } from './constants.js';
+
+/**
+ * Liga ou desliga o alinhamento a grade no arrasto de tela.
+ * @param {boolean} enabled
+ */
+export function setSnapToGrid(enabled) {
+  ui.snapToGrid = enabled;
+  saveSnapToGrid(enabled);
+  toolbar.querySelector('[data-action="toggle-snap"]')
+    ?.setAttribute('aria-pressed', String(enabled));
+}
 
 /**
  * Troca o modo de interacao do board.
@@ -220,6 +232,7 @@ toolbar.addEventListener('click', (event) => {
   else if (action === 'fit') fitToScreen();
   else if (action === 'rearrange') resetPositions();
   else if (action === 'toggle-mode') setMode(ui.mode === 'pointer' ? 'pan' : 'pointer');
+  else if (action === 'toggle-snap') setSnapToGrid(!ui.snapToGrid);
 });
 
 /* ---------- Teclado ---------- */

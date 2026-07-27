@@ -6,12 +6,12 @@
 // comportamento de canvas que se espera.
 
 import { canvas, viewport, zoomLabel } from './dom.js';
-import { screens, view } from './state.js';
+import { screens, ui, view } from './state.js';
 import { setCurrent } from './sidebar.js';
-import { assignColumns, clamp, findOverlaps, rectsOverlap } from './utils.js';
+import { assignColumns, clamp, findOverlaps, rectsOverlap, snapToGrid } from './utils.js';
 import { clearPositions, loadPositions, savePositions } from './storage.js';
 import {
-  CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, GAP,
+  CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, GAP, GRID_SIZE,
   MAX_SCALE, MIN_FRAME_WIDTH, MIN_SCALE,
 } from './constants.js';
 
@@ -224,6 +224,10 @@ export function moveScreen(file, x, y) {
   if (!screen) return;
 
   screen.pinned = true;
+  if (ui.snapToGrid) {
+    x = snapToGrid(x, GRID_SIZE);
+    y = snapToGrid(y, GRID_SIZE);
+  }
   place(screen, x, y);
   refreshOverlaps();
 }

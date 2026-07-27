@@ -18,7 +18,7 @@ import { mimeTypeFor, resolveInside } from '../src/server/http.js';
 import { isForbiddenPreviewPath, isHtmlFile, isIgnoredDir, listScreens } from '../src/server/screens.js';
 import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
-  previewUrl, rectsOverlap, sortNames,
+  previewUrl, rectsOverlap, snapToGrid, sortNames,
 } from '../src/client/utils.js';
 
 /* ---------- cli.js ---------- */
@@ -179,6 +179,13 @@ test('buildTree agrupa por pasta e guarda o caminho de cada nivel', () => {
 });
 
 /* ---------- Colunas do layout ---------- */
+
+test('snapToGrid arredonda para a celula mais proxima', () => {
+  assert.equal(snapToGrid(0, 20), 0);
+  assert.equal(snapToGrid(9, 20), 0);
+  assert.equal(snapToGrid(11, 20), 20);
+  assert.equal(snapToGrid(-11, 20), -20);
+});
 
 test('assignColumns manda cada item para a coluna mais curta', () => {
   assert.deepEqual(assignColumns([100, 100, 300, 100], 2), [[0, 2], [1, 3]]);

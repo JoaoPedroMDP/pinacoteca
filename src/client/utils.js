@@ -13,6 +13,16 @@ export function clamp(value, min, max) {
 }
 
 /**
+ * Arredonda uma coordenada para a grade mais proxima.
+ * @param {number} value
+ * @param {number} size tamanho da celula da grade, em px de canvas
+ * @returns {number}
+ */
+export function snapToGrid(value, size) {
+  return Math.round(value / size) * size;
+}
+
+/**
  * Escapa cada segmento separadamente: as barras continuam sendo barras.
  * @param {string} file caminho relativo da tela
  * @returns {string}

@@ -79,3 +79,25 @@ export function clearPositions() {
     // Idem: nada a fazer se o navegador nao deixa escrever.
   }
 }
+
+// O snap-to-grid e preferencia do navegador, nao da pasta observada: ao
+// contrario das posicoes, uma chave so serve todo board aberto nele.
+const SNAP_KEY = 'pinacoteca:snap-to-grid';
+
+/** @returns {boolean} */
+export function loadSnapToGrid() {
+  try {
+    return localStorage.getItem(SNAP_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** @param {boolean} enabled */
+export function saveSnapToGrid(enabled) {
+  try {
+    localStorage.setItem(SNAP_KEY, enabled ? '1' : '0');
+  } catch {
+    // Sem espaco ou sem permissao: segue funcionando, so nao lembra.
+  }
+}

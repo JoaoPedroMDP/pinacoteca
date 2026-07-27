@@ -58,7 +58,10 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   normal e destaca o elemento sob ele.
  * - `interactiveFile`: a unica tela que esta recebendo cliques do usuario
  *   (duplo clique libera; `Esc` ou clique fora devolve o controle ao board).
+ * - `snapToGrid`: liga o alinhamento a grade no arrasto de tela. Carregado do
+ *   localStorage por `board.js` na carga inicial (`state.js` nao importa
+ *   `storage.js` — a dependencia so anda numa direcao).
  *
- * @type {{ mode: 'pan' | 'pointer', interactiveFile: string | null }}
+ * @type {{ mode: 'pan' | 'pointer', interactiveFile: string | null, snapToGrid: boolean }}
  */
-export const ui = { mode: 'pan', interactiveFile: null };
+export const ui = { mode: 'pan', interactiveFile: null, snapToGrid: false };

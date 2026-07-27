@@ -19,11 +19,12 @@
 
 import { rootPath, version } from './dom.js';
 import { source } from './state.js';
+import { loadSnapToGrid } from './storage.js';
 import { createCard } from './cards.js';
 import { renderSidebar } from './sidebar.js';
 import { applyTransform, fitToScreen, layout } from './view.js';
 import { connectEvents } from './sse.js';
-import './controls.js'; // registra os listeners
+import { setSnapToGrid } from './controls.js'; // tambem registra os listeners
 
 /**
  * @typedef {{ root: string, version: string, screens: string[] }} ScreensResponse
@@ -51,5 +52,6 @@ async function loadScreens() {
 }
 
 applyTransform();
+setSnapToGrid(loadSnapToGrid());
 await loadScreens();
 connectEvents();

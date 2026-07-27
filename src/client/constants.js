@@ -18,6 +18,9 @@ export const MAX_FRAME_HEIGHT = 3200;
 /** Espaco entre cards, em px de canvas. */
 export const GAP = 72;
 
+/** Tamanho da celula da grade quando o snap-to-grid esta ligado, em px de canvas. */
+export const GRID_SIZE = 20;
+
 /** Folga em volta do conteudo ao enquadrar (`fit`) e ao centralizar numa tela. */
 export const FIT_PADDING = 64;
 export const CENTER_PADDING = 48;
