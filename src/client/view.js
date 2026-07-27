@@ -232,6 +232,72 @@ export function moveScreen(file, x, y) {
   refreshOverlaps();
 }
 
+/* ---------- Desfazer / refazer o arrasto de tela ---------- */
+
+/**
+ * @typedef {{ file: string, x: number, y: number }} HistoryEntry
+ *   Posicao de uma tela antes do movimento que a levou ao topo da outra pilha.
+ */
+
+// Limite generoso: um board de prototipo nao arrasta telas milhares de vezes
+// numa sessao, e isto e so para a pilha nao crescer sem fim.
+const HISTORY_LIMIT = 100;
+
+/** @type {HistoryEntry[]} */
+const undoStack = [];
+/** @type {HistoryEntry[]} */
+const redoStack = [];
+
+/**
+ * Registra que `file` estava em `(x, y)` antes do arrasto que acabou de
+ * terminar. So o arrasto de titulo passa por aqui — pan, zoom, snap e
+ * "Reorganizar" nao entram no historico.
+ * @param {string} file
+ * @param {number} x
+ * @param {number} y
+ */
+export function recordMove(file, x, y) {
+  undoStack.push({ file, x, y });
+  if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+  redoStack.length = 0; // acao nova invalida qualquer redo pendente
+}
+
+/** Esquece o historico de arrasto. Chamado quando "Reorganizar" apaga tudo. */
+export function clearHistory() {
+  undoStack.length = 0;
+  redoStack.length = 0;
+}
+
+/**
+ * Troca a posicao atual de uma tela pela do topo de uma pilha, empurrando a
+ * posicao atual para a pilha oposta.
+ * @param {HistoryEntry[]} from
+ * @param {HistoryEntry[]} to
+ */
+function swapHistory(from, to) {
+  const entry = from.pop();
+  if (!entry) return;
+
+  const screen = screens.get(entry.file);
+  if (!screen) return;
+
+  to.push({ file: entry.file, x: screen.x, y: screen.y });
+  screen.pinned = true;
+  place(screen, entry.x, entry.y);
+  refreshOverlaps();
+  persistPositions();
+}
+
+/** Desfaz o ultimo arrasto de tela. Sem historico: nao faz nada. */
+export function undo() {
+  swapHistory(undoStack, redoStack);
+}
+
+/** Refaz o ultimo arrasto desfeito. Sem historico: nao faz nada. */
+export function redo() {
+  swapHistory(redoStack, undoStack);
+}
+
 /**
  * Grava a organizacao atual. So posicao valida entra: uma tela largada em cima
  * de outra mantem no localStorage o ultimo lugar valido em que esteve.
@@ -251,6 +317,7 @@ export function persistPositions() {
 /** Esquece a organizacao do usuario e devolve tudo ao layout automatico. */
 export function resetPositions() {
   clearPositions();
+  clearHistory();
   for (const screen of screens.values()) screen.pinned = false;
   layout();
 }

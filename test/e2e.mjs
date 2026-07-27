@@ -231,6 +231,34 @@ check('Reorganizar apaga a organizacao salva', (await stored()) === null);
 check('Reorganizar desfaz a sobreposicao',
   (await board.evaluate("document.querySelectorAll('.card.is-invalid').length")) === 0);
 
+/* ---------- Desfazer e refazer o arrasto ---------- */
+
+process.stdout.write('\nDesfazer e refazer o arrasto\n');
+
+/** @type {(file: string) => string} */
+const cardLeft = (file) => `document.querySelector('.card[data-file="${file}"]').style.left`;
+
+const beforeUndo = await board.evaluate(cardLeft('solo.html'));
+const movedSolo = await board.evaluate(dragTitle('solo.html', 'box.width * 2', '0'));
+check('arrasto de solo.html mudou a posicao', movedSolo.left !== beforeUndo);
+
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }))");
+await checkEventually('Ctrl+Z desfaz o arrasto',
+  async () => (await board.evaluate(cardLeft('solo.html'))) === beforeUndo);
+
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }))");
+await checkEventually('Ctrl+Shift+Z refaz o arrasto',
+  async () => (await board.evaluate(cardLeft('solo.html'))) === movedSolo.left);
+
+// Desfaz de novo para nao deixar solo.html arrastado atrapalhando os proximos testes.
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }))");
+await checkEventually('estado volta ao original apos desfazer outra vez',
+  async () => (await board.evaluate(cardLeft('solo.html'))) === beforeUndo);
+
+// O arrasto fixa solo.html mesmo apos desfazer a posicao: Reorganizar devolve
+// o layout automatico para os testes seguintes, que dependem dele.
+await board.evaluate("document.querySelector('[data-action=\"rearrange\"]').click()");
+
 /* ---------- Pan nao seleciona texto ---------- */
 
 // O sintoma era a selecao nativa do navegador: o arrasto do board grifava os

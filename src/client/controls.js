@@ -8,7 +8,7 @@ import { toolbar, viewport } from './dom.js';
 import { screens, ui, view } from './state.js';
 import {
   applyTransform, fitToScreen, moveScreen, panBy, persistPositions,
-  resetPositions, resetZoom, zoomAt, zoomByStep,
+  recordMove, redo, resetPositions, resetZoom, undo, zoomAt, zoomByStep,
 } from './view.js';
 import { setInteractive } from './cards.js';
 import { adjustInspectLevel, clearHoverHighlight, hasHoverTarget } from './inspect.js';
@@ -168,6 +168,10 @@ let dragPointerId = null;
 let dragFile = '';
 let dragOffsetX = 0;
 let dragOffsetY = 0;
+// Posicao de antes do arrasto: e o que vai para o historico de undo, se o
+// gesto de fato mover a tela (largar no mesmo lugar nao empilha nada).
+let dragStartX = 0;
+let dragStartY = 0;
 
 viewport.addEventListener('pointerdown', (event) => {
   if (event.button !== 0 || event.altKey) return;
@@ -185,6 +189,8 @@ viewport.addEventListener('pointerdown', (event) => {
   // ficar com o canto embaixo do cursor no primeiro movimento.
   dragOffsetX = point.x - screen.x;
   dragOffsetY = point.y - screen.y;
+  dragStartX = screen.x;
+  dragStartY = screen.y;
 
   viewport.classList.add('is-dragging');
   try {
@@ -209,6 +215,12 @@ function endDrag(event) {
 
   dragPointerId = null;
   viewport.classList.remove('is-dragging');
+
+  const screen = screens.get(dragFile);
+  if (screen && (screen.x !== dragStartX || screen.y !== dragStartY)) {
+    recordMove(dragFile, dragStartX, dragStartY);
+  }
+
   // Posicao invalida (tela em cima de outra) fica na tela, mas nao e salva.
   persistPositions();
 }
@@ -248,6 +260,19 @@ function releaseAltPointer() {
   modeBeforeAlt = null;
 }
 
+/**
+ * Ctrl/Cmd+Z desfaz, Ctrl/Cmd+Shift+Z refaz o ultimo arrasto de tela.
+ * @param {KeyboardEvent} event
+ * @returns {boolean} true se o atalho foi tratado
+ */
+function handleHistoryShortcut(event) {
+  if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z') return false;
+  event.preventDefault(); // senao o navegador tenta desfazer o proprio input
+  if (event.shiftKey) redo();
+  else undo();
+  return true;
+}
+
 window.addEventListener('keydown', (event) => {
   // Segurar Alt ativa o ponteiro enquanto a tecla estiver pressionada.
   if (event.key === 'Alt') {
@@ -257,6 +282,8 @@ window.addEventListener('keydown', (event) => {
     setMode('pointer');
     return;
   }
+
+  if (handleHistoryShortcut(event)) return;
 
   // Os atalhos abaixo nao disputam com os do navegador.
   if (event.metaKey || event.ctrlKey || event.altKey) return;
