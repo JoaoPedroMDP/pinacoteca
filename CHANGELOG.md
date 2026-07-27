@@ -1,3 +1,9 @@
+## 0.5.1 (2026-07-27)
+
+### Fix
+
+- Agora fazer pan em cima de uma tela nao inicia seleção de conteúdo
+
 ## 0.5.0 (2026-07-26)
 
 ### Feat
