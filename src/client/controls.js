@@ -120,6 +120,10 @@ viewport.addEventListener('pointerdown', (event) => {
   // redirecionaria o clique para o viewport e os botoes nunca disparariam.
   if (/** @type {Element} */ (event.target).closest?.('.toolbar')) return;
 
+  // Sem isto o navegador comeca uma selecao de texto no arrasto, e ela se
+  // estende em ordem de DOM: o pan sai grifando os titulos das telas no caminho.
+  event.preventDefault();
+
   panPointerId = event.pointerId;
   panStartX = event.clientX - view.x;
   panStartY = event.clientY - view.y;

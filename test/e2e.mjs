@@ -231,6 +231,26 @@ check('Reorganizar apaga a organizacao salva', (await stored()) === null);
 check('Reorganizar desfaz a sobreposicao',
   (await board.evaluate("document.querySelectorAll('.card.is-invalid').length")) === 0);
 
+/* ---------- Pan nao seleciona texto ---------- */
+
+// O sintoma era a selecao nativa do navegador: o arrasto do board grifava os
+// titulos das telas em ordem de DOM. Quem impede isso e o `preventDefault` no
+// pointerdown do pan, e `defaultPrevented` e a marca observavel dele.
+process.stdout.write('\nPan nao seleciona texto\n');
+
+const panPointerCancelled = await board.evaluate(`(() => {
+  const viewport = document.getElementById('viewport');
+  const at = (type) => new PointerEvent(type, {
+    pointerId: 9, button: 0, bubbles: true, cancelable: true, clientX: 300, clientY: 300,
+  });
+
+  const down = at('pointerdown');
+  viewport.dispatchEvent(down);
+  viewport.dispatchEvent(at('pointerup')); // encerra o gesto: nao sobra pan pela metade
+  return down.defaultPrevented;
+})()`);
+check('pointerdown do pan cancela o padrao do navegador', panPointerCancelled === true);
+
 /* ---------- Titulo e colunas no zoom afastado ---------- */
 
 // Duas telas estreitas e altas entram no board ao lado das largas: e a mistura
