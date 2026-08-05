@@ -304,7 +304,11 @@ fica com todos os eventos.
 
 O pan usa `setPointerCapture` no viewport. Como a toolbar de zoom mora dentro do viewport,
 o `pointerdown` ignora alvos dentro de `.toolbar` — senão a captura redirecionaria o
-`click` para o viewport e os botões de zoom nunca disparariam.
+`click` para o viewport e os botões de zoom nunca disparariam. Pelo mesmo motivo a captura
+só acontece depois que o ponteiro se move além de `PAN_DRAG_THRESHOLD`: capturar já no
+`pointerdown` redireciona também o `click`/`dblclick` de um clique parado (mesmo depois de
+liberada no `pointerup`, o navegador computa o alvo do clique pelo elemento que tinha a
+captura durante o gesto) — e o duplo clique que libera um card nunca chegaria ao escudo.
 
 Duplo clique num card libera aquele card específico — o escudo some e o protótipo passa a
 receber cliques, para preencher formulário e navegar. `Esc` ou um clique fora devolve o

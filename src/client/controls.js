@@ -13,7 +13,7 @@ import {
 import { setInteractive } from './cards.js';
 import { adjustInspectLevel, clearHoverHighlight, hasHoverTarget } from './inspect.js';
 import { saveSnapToGrid } from './storage.js';
-import { WHEEL_STEP, WHEEL_ZOOM_DAMPING, ZOOM_STEP } from './constants.js';
+import { PAN_DRAG_THRESHOLD, WHEEL_STEP, WHEEL_ZOOM_DAMPING, ZOOM_STEP } from './constants.js';
 
 /**
  * Liga ou desliga o alinhamento a grade no arrasto de tela.
@@ -117,6 +117,15 @@ function draggedFile(event) {
 let panPointerId = null;
 let panStartX = 0;
 let panStartY = 0;
+// Onde o pointerdown pegou, em px de tela — para medir o limiar antes de
+// decidir se o gesto e um clique ou um arrasto de fato.
+let panDownClientX = 0;
+let panDownClientY = 0;
+// Vira true so quando o gesto passa do limiar. Ate la nao ha captura nem
+// classe `is-panning`: um clique ou duplo clique que nao se move nunca chega
+// a capturar o ponteiro, entao o click/dblclick vai para o alvo real (o
+// escudo), nao para o viewport.
+let panStarted = false;
 
 viewport.addEventListener('pointerdown', (event) => {
   // Botao esquerdo ou do meio.
@@ -137,14 +146,25 @@ viewport.addEventListener('pointerdown', (event) => {
   event.preventDefault();
 
   panPointerId = event.pointerId;
+  panDownClientX = event.clientX;
+  panDownClientY = event.clientY;
   panStartX = event.clientX - view.x;
   panStartY = event.clientY - view.y;
-  viewport.classList.add('is-panning');
-  viewport.setPointerCapture(event.pointerId);
+  panStarted = false;
 });
 
 viewport.addEventListener('pointermove', (event) => {
   if (event.pointerId !== panPointerId) return;
+
+  if (!panStarted) {
+    const dx = event.clientX - panDownClientX;
+    const dy = event.clientY - panDownClientY;
+    if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD) return; // ainda pode virar clique
+    panStarted = true;
+    viewport.classList.add('is-panning');
+    viewport.setPointerCapture(event.pointerId);
+  }
+
   view.x = event.clientX - panStartX;
   view.y = event.clientY - panStartY;
   applyTransform();
@@ -154,7 +174,15 @@ viewport.addEventListener('pointermove', (event) => {
 function endPan(event) {
   if (event.pointerId !== panPointerId) return;
   panPointerId = null;
+  if (!panStarted) return; // clique: nunca capturou, nada a liberar
+
+  panStarted = false;
   viewport.classList.remove('is-panning');
+  try {
+    viewport.releasePointerCapture(event.pointerId);
+  } catch {
+    // Ponteiro sintetico (teste) ou ja liberado: nada a fazer.
+  }
 }
 
 viewport.addEventListener('pointerup', endPan);
@@ -223,6 +251,14 @@ function endDrag(event) {
 
   // Posicao invalida (tela em cima de outra) fica na tela, mas nao e salva.
   persistPositions();
+
+  // Mesmo motivo do pan: captura viva depois do pointerup desvia o click
+  // seguinte para o viewport.
+  try {
+    viewport.releasePointerCapture(event.pointerId);
+  } catch {
+    // Ponteiro sintetico (teste) ou ja liberado: nada a fazer.
+  }
 }
 
 viewport.addEventListener('pointerup', endDrag);

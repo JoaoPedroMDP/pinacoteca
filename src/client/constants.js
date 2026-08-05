@@ -13,10 +13,19 @@ export const CARD_TITLE_HEIGHT = 36;
 
 export const DEFAULT_FRAME_HEIGHT = 800;
 export const MIN_FRAME_HEIGHT = 400;
-export const MAX_FRAME_HEIGHT = 3200;
+export const MAX_FRAME_HEIGHT = 6400;
 
 /** Espaco entre cards, em px de canvas. */
 export const GAP = 72;
+
+/**
+ * Deslocamento minimo, em px de tela, para o pointerdown do pan virar arrasto
+ * de fato (e so entao capturar o ponteiro). Abaixo disso e tratado como
+ * clique: sem o limiar, capturar no pointerdown redireciona o click/dblclick
+ * seguinte para o viewport em vez do escudo sob o cursor, e o duplo clique
+ * que libera um card pra interagir nunca chega ao listener dele.
+ */
+export const PAN_DRAG_THRESHOLD = 4;
 
 /** Tamanho da celula da grade quando o snap-to-grid esta ligado, em px de canvas. */
 export const GRID_SIZE = 20;
