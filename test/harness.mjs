@@ -67,7 +67,7 @@ export function check(name, condition, detail = '') {
  *
  * @param {string} name
  * @param {() => unknown | Promise<unknown>} predicate
- * @param {{ timeout?: number }} [options]
+ * @param {{ timeout?: number, interval?: number }} [options] repassado a `waitFor`
  */
 export async function checkEventually(name, predicate, options) {
   const ok = await waitFor(predicate, options);

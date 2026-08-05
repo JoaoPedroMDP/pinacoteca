@@ -8,6 +8,7 @@
   --text-muted: #8b93a1;
   --accent: #6ea8fe;
   --danger: #e0645f;
+  --updated: #10b981;
   --card-bg: #ffffff;
   --sidebar-width: 240px;
 }
@@ -304,6 +305,18 @@ body {
   border-radius: 8px;
   background: var(--card-bg);
   box-shadow: 0 8px 32px rgb(0 0 0 / 45%);
+}
+
+/*
+ * Ultima tela mexida pelo agente. Mais grossa que os outros contornos porque a
+ * pergunta que ela responde e "onde foi que mudou?", vista de longe, no zoom
+ * afastado. Vem antes de `is-interactive` e `is-invalid` de proposito: as duas
+ * dizem algo sobre *agora* (o card que recebe clique, a posicao que nao sera
+ * salva) e ganham do historico.
+ */
+.card.is-updated .card-frame {
+  outline: 5px solid var(--updated);
+  outline-offset: 3px;
 }
 
 .card.is-interactive .card-frame {

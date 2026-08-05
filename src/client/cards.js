@@ -106,8 +106,15 @@ function collectAssets(screen, into = new Set()) {
 /**
  * Ajusta o card ao conteudo recem-carregado.
  *
- * A largura vem primeiro de proposito: encolher o card reflui o conteudo, e a
- * altura precisa ser lida ja com a largura final.
+ * A largura e sempre medida com o card devolvido a `CARD_WIDTH`. Medir com o
+ * card ja encolhido faria o *proprio card* virar a viewport do prototipo: um
+ * layout responsivo trocaria de breakpoint, seria medido mais estreito, o card
+ * encolheria de novo — e a cada recarga a tela desceria mais um degrau ate o
+ * `MIN_FRAME_WIDTH`, com o conteudo espremido e cortado. A viewport de
+ * referencia e a mesma sempre, entao a largura medida e sempre a mesma.
+ *
+ * A largura vem antes da altura de proposito: mudar a largura reflui o
+ * conteudo, e a altura precisa ser lida ja com a largura final.
  *
  * @param {Screen} screen
  * @returns {boolean} true quando algum tamanho mudou e o layout precisa rodar
@@ -115,13 +122,17 @@ function collectAssets(screen, into = new Set()) {
 function resizeToContent(screen) {
   let changed = false;
 
-  const width = measureFrameWidth(screen.iframe);
-  if (width && Math.abs(width - screen.frameWidth) > 1) {
+  screen.card.style.width = `${CARD_WIDTH}px`;
+  void screen.iframe.offsetWidth; // aplica a viewport antes de ler de dentro dela
+  const width = measureFrameWidth(screen.iframe) ?? screen.frameWidth;
+
+  screen.card.style.width = `${width}px`;
+  if (Math.abs(width - screen.frameWidth) > 1) {
     screen.frameWidth = width;
-    screen.card.style.width = `${width}px`;
     changed = true;
   }
 
+  void screen.iframe.offsetWidth; // idem: a altura sai do conteudo ja refluido
   const height = measureFrameHeight(screen.iframe);
   if (height && Math.abs(height - screen.frameHeight) > 1) {
     screen.frameHeight = height;
@@ -197,6 +208,7 @@ export function createCard(file) {
     pinned: saved !== null,
     pendingScroll: 0,
     lateScan: null,
+    reloadsSinceSettle: 0,
   };
 
   iframe.addEventListener('load', () => {
@@ -205,8 +217,15 @@ export function createCard(file) {
     // O estilo do destaque some com o documento anterior; reinjeta.
     injectInspectStyle(iframe.contentDocument);
 
+    // Segunda passada: o `load` do iframe nao e o fim da historia. Fonte web,
+    // imagem tardia e conteudo montado por JS chegam depois dele, e a medida
+    // feita no `load` sai errada — o card ficaria do tamanho errado ate a
+    // proxima mudanca do arquivo.
     if (screen.lateScan) clearTimeout(screen.lateScan);
-    screen.lateScan = setTimeout(() => collectAssets(screen, screen.assets), LATE_ASSET_SCAN_MS);
+    screen.lateScan = setTimeout(() => {
+      collectAssets(screen, screen.assets);
+      if (resizeToContent(screen)) layout();
+    }, LATE_ASSET_SCAN_MS);
 
     if (screen.pendingScroll) {
       iframe.contentWindow?.scrollTo(0, screen.pendingScroll);
@@ -230,6 +249,7 @@ export function removeCard(file) {
   if (!screen) return;
 
   if (ui.interactiveFile === file) ui.interactiveFile = null;
+  ui.lastChangedFiles = ui.lastChangedFiles.filter((marked) => marked !== file);
   if (screen.lateScan) clearTimeout(screen.lateScan);
   screen.card.remove();
   screen.item.remove();
@@ -257,11 +277,63 @@ export function reloadCard(file) {
   }
 
   screen.iframe.src = previewUrl(file);
+  screen.reloadsSinceSettle += 1;
 
   screen.item.classList.remove('is-updated');
   // Reinicia a animacao: sem o reflow o navegador ignora a reaplicacao da classe.
   void screen.item.offsetWidth;
   screen.item.classList.add('is-updated');
+}
+
+/**
+ * A pasta parou de se mexer: hora de conferir o resultado final.
+ *
+ * Duas coisas, e nesta ordem de custo. Toda tela e **remedida**, porque o card
+ * pode ter sido dimensionado no `load`, antes de a fonte ou a imagem chegarem.
+ * Tela que recarregou mais de uma vez desde o ultimo silencio **recarrega de
+ * novo**: mais de um evento para o mesmo arquivo e o sintoma de escrita em
+ * pedacos, e o que o board mostra pode ser um estado intermediario.
+ *
+ * Uma edicao atomica cai no caso barato — uma recarga so, sem segunda piscada.
+ */
+export function settle() {
+  let moved = false;
+
+  for (const screen of screens.values()) {
+    const partial = screen.reloadsSinceSettle > 1;
+    screen.reloadsSinceSettle = 0;
+
+    if (partial) {
+      reloadCard(screen.file);
+      screen.reloadsSinceSettle = 0; // a recarga acima nao conta para o proximo silencio
+    } else if (resizeToContent(screen)) {
+      moved = true;
+    }
+  }
+
+  if (moved) layout();
+}
+
+/**
+ * Marca com contorno verde as telas atingidas pelo ultimo evento do servidor, e
+ * so elas — a marca anterior sai.
+ *
+ * Serve para o usuario saber onde o agente mexeu por ultimo. Enquanto o agente
+ * ainda esta escrevendo, o card pode aparecer pela metade; o contorno diz que
+ * aquele card e o que acabou de mudar, e nao que ele ja esta pronto.
+ *
+ * @param {string[]} files telas atingidas; as que nao estao montadas sao ignoradas
+ */
+export function markLastChanged(files) {
+  for (const file of ui.lastChangedFiles) {
+    screens.get(file)?.card.classList.remove('is-updated');
+  }
+
+  ui.lastChangedFiles = files.filter((file) => screens.has(file));
+
+  for (const file of ui.lastChangedFiles) {
+    screens.get(file)?.card.classList.add('is-updated');
+  }
 }
 
 /**

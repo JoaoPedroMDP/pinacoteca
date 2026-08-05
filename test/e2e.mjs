@@ -110,12 +110,22 @@ fixture.write('solo.html', '<!doctype html><meta charset=utf-8><h1>Solo v2</h1>'
 await checkEventually('HTML alterado recarrega o card',
   async () => (await snapshot())['solo.html'] !== initial['solo.html']);
 
+// O contorno verde marca a ultima tela mexida, e so ela: `solo.html` acabou de
+// mudar, entao a marca saiu das telas que o CSS compartilhado tinha recarregado.
+await checkEventually('so a ultima tela alterada fica marcada', () => board.evaluate(
+  "[...document.querySelectorAll('.card.is-updated')].map((c) => c.dataset.file).join() === 'solo.html'"));
+
 fixture.write('novo.html', '<!doctype html><h1>Novo</h1>');
 await checkEventually('HTML novo vira card', async () => (await cardCount()) === 4);
 await checkEventually('HTML novo entra na barra lateral', async () => (await sidebarCount()) === 4);
 
+await checkEventually('tela nova nasce marcada', () => board.evaluate(
+  "[...document.querySelectorAll('.card.is-updated')].map((c) => c.dataset.file).join() === 'novo.html'"));
+
 fixture.remove('novo.html');
 await checkEventually('HTML removido some do board', async () => (await cardCount()) === 3);
+check('tela removida leva a marca junto',
+  await board.evaluate("document.querySelectorAll('.card.is-updated').length === 0"));
 
 /* ---------- Interacao com um card ---------- */
 
@@ -150,6 +160,15 @@ check('toolbar marca o modo ponteiro',
 await board.evaluate(gesture("PointerEvent('pointermove'"));
 await checkEventually('hover destaca o elemento sob o cursor',
   () => board.evaluate(loginCardHas('.pina-focus')));
+
+const isPointerMode = "document.getElementById('viewport').classList.contains('is-pointer')";
+
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))");
+check('segurar espaco no modo ponteiro ativa o pan',
+  (await board.evaluate(isPointerMode)) === false);
+
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }))");
+check('soltar o espaco volta ao modo ponteiro', await board.evaluate(isPointerMode));
 
 await board.evaluate("document.querySelector('[data-action=\"toggle-mode\"]').click()");
 await checkEventually('sair do modo ponteiro limpa o destaque',
@@ -344,6 +363,75 @@ check('titulo nao passa da largura do card na tela', widest.excess <= 1,
 const stolen = boxes.filter((box) => box.owner !== box.file);
 check('clique em cima do titulo pega a propria tela', stolen.length === 0,
   stolen.map((box) => `${box.file} -> ${box.owner}`).join(' | '));
+
+/* ---------- Silencio da pasta e medida tardia ---------- */
+
+// O `load` do iframe nao e o fim da historia: conteudo montado por JS chega
+// depois dele. Sem a segunda passada, este card ficaria com a altura medida no
+// `load` — a do documento ainda vazio — ate o arquivo mudar de novo.
+process.stdout.write('\nSilencio da pasta e medida tardia\n');
+
+fixture.write('tardio.html', `<!doctype html><meta charset=utf-8><style>body{margin:0}</style>
+<script>setTimeout(() => {
+  const tall = document.createElement('div');
+  tall.style.cssText = 'width:600px;height:2000px;background:#fed';
+  document.body.append(tall);
+}, 100);</script>`);
+
+/** @type {() => Promise<number>} */
+const cardHeight = async () => board.evaluate(
+  "document.querySelector('.card[data-file=\"tardio.html\"]')?.querySelector('.card-frame').offsetHeight ?? 0");
+
+await checkEventually('conteudo montado por JS ainda ajusta o card',
+  async () => (await cardHeight()) > 1000);
+
+// O `settled` e sobre a pasta inteira, nao sobre um arquivo: e o sinal de que
+// quem estava escrevendo parou. Uma segunda conexao ao stream le o contrato
+// direto, sem depender de como o board reage a ele.
+await board.evaluate(`(() => {
+  window.__settled = 0;
+  const stream = new EventSource('/events');
+  stream.addEventListener('message', (event) => {
+    if (JSON.parse(event.data).type === 'settled') window.__settled += 1;
+  });
+  return true;
+})()`);
+
+await checkEventually('servidor avisa quando a pasta silencia', async () => {
+  fixture.write('solo.html', `<!doctype html><meta charset=utf-8><h1>Solo ${Date.now()}</h1>`);
+  return (await board.evaluate('window.__settled')) > 0;
+}, { interval: 900, timeout: 20000 });
+
+/* ---------- Largura nao encolhe a cada recarga ---------- */
+
+// O bug era um degrau por recarga: o card media a propria largura, encolhia, e
+// na recarga seguinte media dentro da largura ja encolhida. Um layout
+// responsivo troca de breakpoint nessa hora e e medido mais estreito ainda, e a
+// tela desce ate o minimo, espremida. A medida tem de acontecer sempre na
+// viewport de referencia.
+process.stdout.write('\nLargura nao encolhe a cada recarga\n');
+
+/** @type {(tag: number) => string} */
+const RESPONSIVE = (tag) => `<!doctype html><meta charset=utf-8>
+<style>body{margin:0}div{width:600px;height:900px;margin:0 auto;background:#dfe}
+@media (max-width: 700px){div{width:250px}}</style><div>v${tag}</div>`;
+
+const responsiveWidth = async () => board.evaluate(
+  "document.querySelector('.card[data-file=\"responsivo.html\"]')?.offsetWidth ?? 0");
+
+fixture.write('responsivo.html', RESPONSIVE(1));
+await checkEventually('tela responsiva entra medindo o breakpoint largo',
+  async () => (await responsiveWidth()) === 600);
+
+for (const round of [2, 3, 4]) {
+  const before = await snapshot();
+  fixture.write('responsivo.html', RESPONSIVE(round));
+
+  await checkEventually(`recarga ${round} nao encolhe a tela responsiva`, async () => {
+    const now = await snapshot();
+    return reloaded(before, now, ['responsivo.html']) && (await responsiveWidth()) === 600;
+  });
+}
 
 /* ---------- Servidor ---------- */
 

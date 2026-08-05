@@ -67,7 +67,8 @@ e ainda exigiria um parser de CSS junto, com invalidação de cache própria.
 A lista é recoletada no evento `load` de cada iframe, então o map se auto-corrige a cada
 recarregamento em vez de precisar ser invalidado. Uma segunda passada, `LATE_ASSET_SCAN_MS`
 depois, pega
-recursos que chegam tarde.
+recursos que chegam tarde — e remede o card junto, pelo mesmo motivo (veja "O `load` não
+é o fim").
 
 Limite conhecido: se uma tela referencia um arquivo que ainda não existe, o recurso só
 entra no map se o navegador registrar a tentativa falha. Quando não registra, aquela tela
@@ -133,10 +134,11 @@ lugar só, no `send` de `http.js`, e não em cada rota.
 Eventos SSE emitidos:
 
 ```
-{ "type": "change", "file": "login.html" }   // conteúdo mudou → recarrega só esse iframe
-{ "type": "add",    "file": "signup.html" }  // arquivo novo  → insere card e item na sidebar
-{ "type": "unlink", "file": "old.html" }     // removido      → remove card e item da sidebar
-{ "type": "asset",  "file": "css/base.css" } // asset mudou   → recarrega as telas que usam esse arquivo
+{ "type": "change",  "file": "login.html" }   // conteúdo mudou → recarrega só esse iframe
+{ "type": "add",     "file": "signup.html" }  // arquivo novo  → insere card e item na sidebar
+{ "type": "unlink",  "file": "old.html" }     // removido      → remove card e item da sidebar
+{ "type": "asset",   "file": "css/base.css" } // asset mudou   → recarrega as telas que usam esse arquivo
+{ "type": "settled", "file": "" }             // a pasta parou → confere o resultado final
 ```
 
 O servidor não sabe quais telas um asset afeta, e não tenta descobrir: ele só avisa que
@@ -146,6 +148,28 @@ Mudanças de arquivo chegam em rajada (um salvamento pode disparar vários event
 `fs`). Duas defesas: o `awaitWriteFinish` do chokidar espera o arquivo parar de crescer,
 para o board nunca carregar um HTML escrito pela metade, e um debounce (`DEBOUNCE_MS`)
 agrupa os eventos por arquivo antes de mandá-los ao cliente.
+
+#### Escrita atômica
+
+Gravar num temporário e renomear por cima chega ao `fs` como `unlink` seguido de `add`.
+O chokidar junta o par de volta num `change` se os dois caírem dentro de uma janela — e é
+isso que preserva o card: sem a junção, o board destruiria a tela e montaria outra no
+lugar, perdendo o enquadramento e jogando a câmera para cima da recém-criada.
+
+A janela padrão do chokidar é curta demais para um agente que reescreve um HTML inteiro,
+então ela é alargada (`ATOMIC_WINDOW_MS`). O preço é que a remoção de verdade de uma tela
+demora esse tanto a mais para sair do board — barato perto de um card destruído à toa.
+
+#### Quando quem escreve para
+
+O `awaitWriteFinish` compara **tamanho** de arquivo, e só. Um arquivo escrito em pedaços
+pode ficar do mesmo tamanho tempo suficiente para o evento sair com conteúdo pela metade —
+o board mostra um estado intermediário e fica nele até a próxima mudança.
+
+Daí o `settled`: `QUIET_MS` sem *nenhum* evento na pasta inteira significa que quem estava
+escrevendo parou. É um evento sobre a pasta, não sobre um arquivo, e por isso `file` vem
+vazio. Ele não substitui a recarga imediata — o board recarrega na hora, para o usuário
+ver a mudança acontecendo; o `settled` confere o resultado final depois.
 
 ### Cliente (board)
 
@@ -212,6 +236,13 @@ Assim o card fica do tamanho da tela, não 1280px com faixas vazias. Limitada en
 `MIN_FRAME_WIDTH` e `CARD_WIDTH`.
 A medição vem primeiro, porque encolher o card reflui o conteúdo e a altura precisa ser
 lida já com a largura final.
+
+**A medida sempre acontece com o card devolvido a `CARD_WIDTH`**, e essa é a parte que não
+pode ser esquecida. Medir com o card já encolhido faz o próprio card virar a viewport do
+protótipo: um layout responsivo troca de breakpoint, é medido mais estreito ainda, o card
+encolhe de novo — e a tela desce um degrau por recarga até o `MIN_FRAME_WIDTH`, com o
+conteúdo espremido e cortado. Com a viewport de referência sempre igual, a largura medida
+é sempre a mesma, e uma recarga que não mudou o conteúdo não mexe no card.
 
 A **altura** é medida por `scrollHeight`, limitada entre `MIN_FRAME_HEIGHT` e
 `MAX_FRAME_HEIGHT`. Sem isso, uma landing page
@@ -291,9 +322,13 @@ foco: o board enquadra e centraliza nela automaticamente.
 
 #### Modo ponteiro
 
-A toolbar alterna entre dois modos, e **segurar `Alt`** ativa o ponteiro enquanto a tecla
-estiver pressionada, voltando ao modo anterior ao soltar (perder o foco da janela também
-solta, para não travar no ponteiro). No **pan** (padrão) o cursor é a mão e arrastar move o
+A toolbar alterna entre dois modos, e cada um deles tem uma tecla que o segura enquanto
+estiver pressionada: **`Alt`** segura o ponteiro e **espaço** segura o pan. Soltar volta ao
+modo anterior (perder o foco da janela também solta, para não travar no modo segurado), e
+só uma tecla segura por vez — com as duas ativas ao mesmo tempo, soltar uma restauraria o
+modo errado. É o que evita a ida à toolbar para um pan rápido no meio da inspeção; o espaço
+tem `preventDefault` sempre, senão rolaria a página e acionaria o botão da toolbar que
+estivesse com o foco. No **pan** (padrão) o cursor é a mão e arrastar move o
 board. No **ponteiro** o cursor é normal e arrastar com o botão esquerdo não move o board (o
 do meio ainda move); ao passar o mouse sobre um card, o elemento sob o cursor fica em foco e
 os demais daquele card recebem `.pina-dim` (blur). O alvo
@@ -319,6 +354,37 @@ para um novo elemento reinicia o nível em 0.
 `reloadCard` guarda o `scrollY` interno do iframe antes de trocar o `src` e o restaura no
 `load` seguinte. Sem isso, uma edição no rodapé de uma página longa jogaria a tela de
 volta para o topo a cada salvamento.
+
+#### Última tela mexida
+
+O caso de uso é o agente reescrevendo HTML enquanto o board está aberto num segundo
+monitor: a tela pisca, muda um pouco e às vezes fica estranha por um instante. Sem uma
+marca, não dá para saber se aquilo é bug do protótipo ou o agente ainda escrevendo.
+
+As telas atingidas pelo **último** evento do servidor ganham um contorno verde esmeralda,
+mais grosso que os outros — a pergunta que ele responde é "onde mudou?", vista de longe.
+São várias telas quando o evento foi um asset compartilhado, porque um `@import` alterado
+mexe em todas as telas que o carregam.
+
+A marca é histórico, não estado atual: ela **perde** para o contorno de tela interativa e
+para o de posição inválida, que falam do agora. Um evento que não atingiu tela nenhuma
+(remoção, asset que ninguém carrega) deixa a marca anterior de pé — ela continua sendo a
+última tela mexida.
+
+A marca diz que aquele card *acabou de mudar*, não que ele está *pronto*. Quem responde a
+segunda pergunta é o `settled`.
+
+#### O `load` não é o fim
+
+Fonte web, imagem tardia e conteúdo montado por JS chegam **depois** do `load` do iframe.
+Um card medido só ali sai do tamanho errado e fica assim até o arquivo mudar de novo —
+sintoma de "a tela ficou meio bugada" que nada tem a ver com o agente. Por isso a medida
+acontece três vezes: no `load`, na segunda passada (`LATE_ASSET_SCAN_MS`) e no `settled`.
+
+No `settled` toda tela é **remedida**, e a que recarregou mais de uma vez desde o silêncio
+anterior **recarrega mais uma**: mais de um evento para o mesmo arquivo é o sintoma de
+escrita em pedaços, e o que está desenhado pode ser um estado intermediário. Uma edição
+atômica cai no caso barato — uma recarga só, sem segunda piscada.
 
 ## Estrutura de pastas
 

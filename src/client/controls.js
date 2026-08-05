@@ -249,15 +249,37 @@ toolbar.addEventListener('click', (event) => {
 
 /* ---------- Teclado ---------- */
 
-// Modo de antes de segurar Alt; null quando o Alt nao esta segurando o ponteiro.
+// Estado do modo temporario: `Alt` segura o ponteiro, `espaco` segura o pan.
+// `heldKey` e a tecla que esta segurando; `modeBeforeHold`, o modo de voltar ao
+// solta-la. Uma tecla por vez — segurar a segunda enquanto a primeira esta
+// pressionada nao faz nada, senao soltar uma delas restauraria o modo errado.
+/** @type {string | null} */
+let heldKey = null;
 /** @type {'pan' | 'pointer' | null} */
-let modeBeforeAlt = null;
+let modeBeforeHold = null;
 
-/** Soltar o Alt (ou perder o foco da janela) volta ao modo anterior. */
-function releaseAltPointer() {
-  if (modeBeforeAlt === null) return;
-  setMode(modeBeforeAlt);
-  modeBeforeAlt = null;
+/**
+ * Segura um modo enquanto a tecla estiver pressionada.
+ * @param {string} key a tecla que esta segurando, para o keyup saber de quem e
+ * @param {'pan' | 'pointer'} mode
+ * @returns {boolean} true se o modo passou a ser segurado por esta tecla
+ */
+function holdMode(key, mode) {
+  // Ja segurando (inclusive a repeticao do proprio keydown), ou ja no modo
+  // pedido — nos dois casos nao ha o que guardar.
+  if (heldKey !== null || ui.mode === mode) return false;
+  heldKey = key;
+  modeBeforeHold = ui.mode;
+  setMode(mode);
+  return true;
+}
+
+/** Soltar a tecla (ou perder o foco da janela) volta ao modo anterior. */
+function releaseHeldMode() {
+  if (modeBeforeHold === null) return;
+  setMode(modeBeforeHold);
+  heldKey = null;
+  modeBeforeHold = null;
 }
 
 /**
@@ -276,10 +298,18 @@ function handleHistoryShortcut(event) {
 window.addEventListener('keydown', (event) => {
   // Segurar Alt ativa o ponteiro enquanto a tecla estiver pressionada.
   if (event.key === 'Alt') {
-    if (modeBeforeAlt !== null || ui.mode === 'pointer') return;
-    event.preventDefault(); // evita o Alt roubar o foco pro menu do navegador
-    modeBeforeAlt = ui.mode;
-    setMode('pointer');
+    // O preventDefault evita o Alt roubar o foco pro menu do navegador — mas so
+    // quando a tecla de fato assumiu o ponteiro.
+    if (holdMode('Alt', 'pointer')) event.preventDefault();
+    return;
+  }
+
+  // Segurar espaco ativa o pan: da pra arrastar o board sem sair do ponteiro.
+  if (event.key === ' ') {
+    // Sempre: espaco rola a pagina e aciona o botao da toolbar que estiver com o
+    // foco. Nos dois casos o gesto que o usuario quer e o pan.
+    event.preventDefault();
+    holdMode(' ', 'pan');
     return;
   }
 
@@ -296,8 +326,8 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keyup', (event) => {
-  if (event.key === 'Alt') releaseAltPointer();
+  if (event.key === heldKey) releaseHeldMode();
 });
 
-// Perder o foco solta a tecla sem disparar keyup: nao deixa preso no ponteiro.
-window.addEventListener('blur', releaseAltPointer);
+// Perder o foco solta a tecla sem disparar keyup: nao deixa preso no modo.
+window.addEventListener('blur', releaseHeldMode);

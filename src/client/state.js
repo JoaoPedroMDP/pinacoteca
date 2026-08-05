@@ -23,7 +23,11 @@
  * @property {boolean} pinned true quando a posicao veio do usuario (arrasto ou
  *   localStorage). Tela fixa nao e movida pelo layout automatico.
  * @property {number} pendingScroll scroll interno a restaurar apos recarregar
- * @property {ReturnType<typeof setTimeout> | null} lateScan segunda passada de assets
+ * @property {ReturnType<typeof setTimeout> | null} lateScan segunda passada de
+ *   assets e de medida do conteudo
+ * @property {number} reloadsSinceSettle quantas vezes esta tela recarregou desde
+ *   o ultimo silencio da pasta. Mais de uma significa que o arquivo chegou em
+ *   pedacos, e o `settled` recarrega de novo para garantir o conteudo final.
  */
 
 /**
@@ -61,7 +65,17 @@ export const view = { scale: 1, x: 0, y: 0 };
  * - `snapToGrid`: liga o alinhamento a grade no arrasto de tela. Carregado do
  *   localStorage por `board.js` na carga inicial (`state.js` nao importa
  *   `storage.js` — a dependencia so anda numa direcao).
+ * - `lastChangedFiles`: as telas atingidas pelo *ultimo* evento do servidor. Sao
+ *   varias quando o evento foi um asset compartilhado. Ficam com contorno verde
+ *   ate o proximo evento chegar.
  *
- * @type {{ mode: 'pan' | 'pointer', interactiveFile: string | null, snapToGrid: boolean }}
+ * @type {{
+ *   mode: 'pan' | 'pointer',
+ *   interactiveFile: string | null,
+ *   snapToGrid: boolean,
+ *   lastChangedFiles: string[],
+ * }}
  */
-export const ui = { mode: 'pan', interactiveFile: null, snapToGrid: false };
+export const ui = {
+  mode: 'pan', interactiveFile: null, snapToGrid: false, lastChangedFiles: [],
+};
