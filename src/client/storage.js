@@ -15,7 +15,13 @@ import { source } from './state.js';
 
 const KEY_PREFIX = 'pinacoteca:positions:';
 
-/** @typedef {{ x: number, y: number }} Position */
+/**
+ * Onde a tela ficou e, quando o usuario redimensionou, o tamanho que ele
+ * escolheu. `width`/`height` sao opcionais de proposito: uma entrada gravada
+ * antes do redimensionamento existir continua valendo, e a tela sem eles volta
+ * a ser medida pelo conteudo.
+ * @typedef {{ x: number, y: number, width?: number, height?: number }} Position
+ */
 
 /** @returns {string} */
 function storageKey() {
@@ -39,9 +45,17 @@ export function loadPositions() {
 
     for (const [file, value] of Object.entries(parsed)) {
       // Descarta entrada estragada em vez de deixar um NaN chegar ao layout.
-      if (Number.isFinite(value?.x) && Number.isFinite(value?.y)) {
-        positions[file] = { x: value.x, y: value.y };
+      if (!Number.isFinite(value?.x) || !Number.isFinite(value?.y)) continue;
+
+      /** @type {Position} */
+      const position = { x: value.x, y: value.y };
+      // Tamanho so entra se os dois lados vierem sadios: meio tamanho salvo
+      // deixaria o card com uma dimensao do usuario e outra medida.
+      if (Number.isFinite(value.width) && Number.isFinite(value.height)) {
+        position.width = value.width;
+        position.height = value.height;
       }
+      positions[file] = position;
     }
   } catch {
     return {};

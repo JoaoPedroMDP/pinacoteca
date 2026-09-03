@@ -84,6 +84,41 @@ export function findOverlaps(boxes) {
 }
 
 /**
+ * @typedef {'right' | 'bottom' | 'corner'} ResizeZone
+ */
+
+/**
+ * Em qual borda redimensionavel do frame o ponto caiu.
+ *
+ * So a direita, a base e a quina entre as duas: sao as bordas que crescem o
+ * card sem mexer no canto de cima, entao o `x`/`y` da tela nunca muda durante
+ * o arrasto. Tudo em px de *tela*, porque a folga de agarre precisa ter o mesmo
+ * tamanho para o dedo em qualquer nivel de zoom.
+ *
+ * @param {number} clientX
+ * @param {number} clientY
+ * @param {Rect} frameRect caixa do frame na tela (getBoundingClientRect)
+ * @param {number} edge folga de agarre, em px de tela
+ * @returns {ResizeZone | null} null quando o ponto esta longe das bordas
+ */
+export function resizeZoneAt(clientX, clientY, frameRect, edge) {
+  const right = frameRect.x + frameRect.width;
+  const bottom = frameRect.y + frameRect.height;
+
+  // A folga vale para os dois lados da borda: um pouco antes e um pouco depois.
+  if (clientX < frameRect.x || clientX > right + edge) return null;
+  if (clientY < frameRect.y || clientY > bottom + edge) return null;
+
+  const nearRight = clientX >= right - edge;
+  const nearBottom = clientY >= bottom - edge;
+
+  if (nearRight && nearBottom) return 'corner';
+  if (nearRight) return 'right';
+  if (nearBottom) return 'bottom';
+  return null;
+}
+
+/**
  * Reparte itens entre `columns` colunas, cada item indo para a coluna mais curta
  * no momento. So distribui: quem chama e que sabe posicionar.
  *

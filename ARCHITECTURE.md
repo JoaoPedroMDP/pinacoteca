@@ -233,7 +233,9 @@ direita menos esquerda do mais à esquerda, não o `scrollWidth` nem só a borda
 tela mobile centralizada numa viewport de 1280px tem margem vazia dos dois lados, e só a
 diferença dá a largura da tela em si; encolher o card recentra o conteúdo e a margem some.
 Assim o card fica do tamanho da tela, não 1280px com faixas vazias. Limitada entre
-`MIN_FRAME_WIDTH` e `CARD_WIDTH`.
+`MIN_FRAME_WIDTH` e `CARD_WIDTH` — no redimensionamento manual o teto é `MAX_FRAME_WIDTH`,
+maior, porque `CARD_WIDTH` é só a viewport de referência da medida (veja "Tamanho escolhido
+pelo usuário").
 A medição vem primeiro, porque encolher o card reflui o conteúdo e a altura precisa ser
 lida já com a largura final.
 
@@ -295,6 +297,45 @@ caso é o board voltar ao layout automático, nunca quebrar.
 Limite conhecido: uma tela fixa pode virar inválida sozinha, quando o conteúdo dela cresce
 e o card passa a invadir o vizinho. Ela fica vermelha, mas a posição já gravada continua
 gravada — ela era válida quando foi salva.
+
+#### Tamanho escolhido pelo usuário
+
+O card também pode ser redimensionado à mão, por duas portas: arrastando a borda do frame
+ou escolhendo uma dimensão no menu do título. Serve para conferir o protótipo numa viewport
+conhecida sem ter de mexer no HTML.
+
+Só as bordas **direita**, **de baixo** e a quina entre elas agarram (`RESIZE_EDGE_PX` de
+folga, em px de tela para o alvo ter o mesmo tamanho em qualquer zoom). São as que crescem
+o card sem mexer no canto de cima: o `x`/`y` da tela nunca muda durante o gesto, então não
+há posição a recalcular junto. A faixa não é um elemento a mais no DOM — é o escudo que já
+cobre o frame, comparando o cursor com a caixa dele; o cursor sob o mouse é o único aviso de
+que ali se agarra.
+
+Redimensionar **fixa** a tela, como mover fixa: a largura de uma coluna do layout automático
+sai da tela mais larga dela, e devolver a tela ao fluxo logo depois de o usuário escolher o
+tamanho a jogaria para outro lugar no mesmo gesto. E vale a mesma regra de posição inválida:
+esticar por cima de outra tela deixa as duas vermelhas e o tamanho novo não é gravado.
+
+Uma tela com tamanho próprio (`sized`) **não é mais remedida** — sem isso a próxima recarga
+do iframe desfaria a escolha do usuário. O `localStorage` guarda `width`/`height` junto da
+posição, e os dois campos são opcionais: um registro gravado antes disso continua válido, e
+a tela sem eles volta a ser medida pelo conteúdo.
+
+O menu do título traz as dimensões de `PRESET_FRAME_SIZES` e um **Automático**, que larga o
+tamanho manual e remede. A altura volta ao padrão antes dessa medida, pelo mesmo motivo que
+a largura volta a `CARD_WIDTH`: o `scrollHeight` de uma página curta é a altura do próprio
+frame, então medir sem zerar apenas confirmaria o tamanho que o usuário quer descartar. O
+"Reorganizar" faz isso com todas as telas — ele apaga a organização inteira, e o tamanho
+manual faz parte dela.
+
+O menu mora **dentro** do título, que já é contra-escalado: assim ele e o botão saem do
+mesmo tamanho na tela em qualquer zoom, sem ninguém calcular posição em px de tela. O preço
+é que o `transform` do título fecha um contexto de empilhamento — o `z-index` do menu só
+vale lá dentro, então quem sobe acima do frame é o título inteiro, com o menu aberto.
+
+Limite conhecido: uma tela liberada para interação não pode ser redimensionada pela borda —
+o escudo sai do caminho para o protótipo receber os cliques, e é ele quem detecta a borda.
+`Esc` devolve o controle ao board e a borda volta a agarrar.
 
 #### Escudo sobre o iframe
 

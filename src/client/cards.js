@@ -7,14 +7,15 @@
 
 import { canvas } from './dom.js';
 import { screens, ui } from './state.js';
-import { clamp, previewUrl } from './utils.js';
-import { centerOn, layout } from './view.js';
+import { clamp, previewUrl, resizeZoneAt } from './utils.js';
+import { applyPresetSize, centerOn, layout, persistPositions } from './view.js';
 import { setCurrent } from './sidebar.js';
 import { clearHoverHighlight, copyXPathAt, injectInspectStyle, onInspectMove } from './inspect.js';
 import { savedPosition } from './storage.js';
 import {
   CARD_WIDTH, DEFAULT_FRAME_HEIGHT, LATE_ASSET_SCAN_MS,
   MAX_FRAME_HEIGHT, MIN_FRAME_HEIGHT, MIN_FRAME_WIDTH,
+  PRESET_FRAME_SIZES, RESIZE_CURSORS, RESIZE_EDGE_PX,
 } from './constants.js';
 
 /** @typedef {import('./state.js').Screen} Screen */
@@ -120,6 +121,10 @@ function collectAssets(screen, into = new Set()) {
  * @returns {boolean} true quando algum tamanho mudou e o layout precisa rodar
  */
 function resizeToContent(screen) {
+  // Tamanho escolhido pelo usuario nao se remede sozinho: cada recarga do
+  // iframe desfaria a escolha dele.
+  if (screen.sized) return false;
+
   let changed = false;
 
   screen.card.style.width = `${CARD_WIDTH}px`;
@@ -144,6 +149,66 @@ function resizeToContent(screen) {
 }
 
 /**
+ * Monta o titulo: o nome da tela, o botao de tamanho e o menu dele.
+ *
+ * Fica dentro do titulo, e nao flutuando no viewport, porque o titulo ja e
+ * contra-escalado por `1/scale` — assim o botao e o menu saem do tamanho certo
+ * em qualquer zoom, sem ninguem calcular posicao em px de tela.
+ *
+ * @param {string} file
+ * @returns {HTMLElement} o `<header>` do card
+ */
+function buildTitle(file) {
+  const title = document.createElement('header');
+  title.className = 'card-title';
+
+  const label = document.createElement('span');
+  label.className = 'card-title-label';
+  label.textContent = file;
+  // No zoom afastado o rotulo trunca (veja `.card-title-label` em board.css); o
+  // nome inteiro continua alcancavel pelo hover.
+  label.title = file;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'card-resize-btn';
+  button.title = 'Redimensionar';
+  button.setAttribute('aria-expanded', 'false');
+  button.textContent = '⤡';
+  button.addEventListener('click', () => toggleSizeMenu(file));
+
+  const menu = document.createElement('div');
+  menu.className = 'card-size-menu';
+
+  const auto = document.createElement('button');
+  auto.type = 'button';
+  auto.className = 'card-size-option';
+  auto.dataset.size = 'auto';
+  auto.textContent = 'Automatico';
+  auto.addEventListener('click', () => {
+    autoSizeCard(file);
+    closeSizeMenu();
+  });
+  menu.append(auto);
+
+  for (const preset of PRESET_FRAME_SIZES) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'card-size-option';
+    option.dataset.size = `${preset.width}x${preset.height}`;
+    option.textContent = `${preset.label} ${preset.width}×${preset.height}`;
+    option.addEventListener('click', () => {
+      applyPresetSize(file, preset.width, preset.height);
+      closeSizeMenu();
+    });
+    menu.append(option);
+  }
+
+  title.append(label, button, menu);
+  return title;
+}
+
+/**
  * Monta o card e o item de sidebar de uma tela e registra em `screens`.
  * Quem chama e responsavel por rodar `renderSidebar()` e `layout()` depois.
  *
@@ -154,18 +219,11 @@ export function createCard(file) {
   const card = document.createElement('article');
   card.className = 'card';
   card.dataset.file = file; // e por aqui que o arrasto sabe qual tela ele pegou
-  card.style.width = `${CARD_WIDTH}px`; // largura inicial; ajustada ao conteudo no load
 
-  const title = document.createElement('header');
-  title.className = 'card-title';
-  title.textContent = file;
-  // No zoom afastado o rotulo trunca (veja `.card-title` em board.css); o nome
-  // inteiro continua alcancavel pelo hover.
-  title.title = file;
+  const title = buildTitle(file);
 
   const frame = document.createElement('div');
   frame.className = 'card-frame';
-  frame.style.height = `${DEFAULT_FRAME_HEIGHT}px`;
 
   const iframe = document.createElement('iframe');
   iframe.src = previewUrl(file);
@@ -178,8 +236,17 @@ export function createCard(file) {
     // Alt+clique captura o elemento sob o cursor e copia o XPath dele.
     if (event.altKey) copyXPathAt(file, event);
   });
-  shield.addEventListener('pointermove', (event) => onInspectMove(file, event));
+  shield.addEventListener('pointermove', (event) => {
+    // Perto de uma borda que agarra, o cursor ja avisa que dali sai um
+    // redimensionamento — o escudo e quem recebe o ponteiro sobre o frame.
+    const zone = resizeZoneAt(
+      event.clientX, event.clientY, frame.getBoundingClientRect(), RESIZE_EDGE_PX,
+    );
+    shield.style.cursor = zone ? RESIZE_CURSORS[zone] : '';
+    onInspectMove(file, event);
+  });
   shield.addEventListener('pointerleave', () => {
+    shield.style.cursor = '';
     if (ui.mode === 'pointer') clearHoverHighlight();
   });
 
@@ -194,22 +261,29 @@ export function createCard(file) {
   item.textContent = file.slice(file.lastIndexOf('/') + 1);
   item.addEventListener('click', () => centerOn(file));
 
-  // A tela volta para onde o usuario a deixou da ultima vez, se ja a moveu.
+  // A tela volta para onde — e do tamanho que — o usuario a deixou da ultima vez.
   const saved = savedPosition(file);
+  const savedSize = saved?.width !== undefined && saved.height !== undefined;
 
   /** @type {Screen} */
   const screen = {
     file, card, frame, iframe, item,
     assets: new Set(),
-    frameWidth: CARD_WIDTH,
-    frameHeight: DEFAULT_FRAME_HEIGHT,
+    frameWidth: saved?.width ?? CARD_WIDTH,
+    frameHeight: saved?.height ?? DEFAULT_FRAME_HEIGHT,
     x: saved?.x ?? 0,
     y: saved?.y ?? 0,
     pinned: saved !== null,
+    sized: savedSize,
     pendingScroll: 0,
     lateScan: null,
     reloadsSinceSettle: 0,
   };
+
+  // Depois de `screen` existir, para uma tela com tamanho salvo ja nascer nele
+  // em vez de piscar no tamanho padrao ate a primeira medida.
+  card.style.width = `${screen.frameWidth}px`;
+  frame.style.height = `${screen.frameHeight}px`;
 
   iframe.addEventListener('load', () => {
     // Recoletado a cada carga: o map de assets nunca fica velho.
@@ -249,6 +323,7 @@ export function removeCard(file) {
   if (!screen) return;
 
   if (ui.interactiveFile === file) ui.interactiveFile = null;
+  if (ui.openSizeMenuFile === file) ui.openSizeMenuFile = null;
   ui.lastChangedFiles = ui.lastChangedFiles.filter((marked) => marked !== file);
   if (screen.lateScan) clearTimeout(screen.lateScan);
   screen.card.remove();
@@ -334,6 +409,78 @@ export function markLastChanged(files) {
   for (const file of ui.lastChangedFiles) {
     screens.get(file)?.card.classList.add('is-updated');
   }
+}
+
+/**
+ * Larga o tamanho manual e mede o conteudo de novo.
+ *
+ * A altura volta ao padrao antes da medida pelo mesmo motivo que a largura
+ * volta a `CARD_WIDTH` dentro de `resizeToContent`: o `scrollHeight` de uma
+ * pagina curta e a altura do proprio frame, entao medir sem zerar apenas
+ * confirmaria o tamanho que o usuario tinha escolhido.
+ *
+ * @param {Screen} screen
+ */
+function measureAgain(screen) {
+  screen.sized = false;
+  screen.frameHeight = DEFAULT_FRAME_HEIGHT;
+  screen.frame.style.height = `${DEFAULT_FRAME_HEIGHT}px`;
+  resizeToContent(screen);
+}
+
+/**
+ * Devolve a tela ao tamanho do proprio conteudo, desfazendo o
+ * redimensionamento manual. E a saida do menu de tamanho para quem se
+ * arrependeu do arrasto ou do preset.
+ * @param {string} file
+ */
+export function autoSizeCard(file) {
+  const screen = screens.get(file);
+  if (!screen) return;
+
+  measureAgain(screen);
+  layout();
+  // A tela continua fixa, so nao tem mais tamanho proprio: regravar tira o
+  // `width`/`height` do registro salvo.
+  persistPositions();
+}
+
+/**
+ * Devolve *todas* as telas ao tamanho do conteudo. Chamado junto com o
+ * "Reorganizar": ele apaga a organizacao inteira do usuario, e tamanho manual
+ * faz parte dela.
+ *
+ * Nao roda `layout()` nem grava nada — quem chama ja faz as duas coisas em
+ * seguida, e um layout a mais aqui so andaria os cards duas vezes.
+ */
+export function resetSizes() {
+  for (const screen of screens.values()) measureAgain(screen);
+}
+
+/**
+ * Abre o menu de tamanho de uma tela, ou fecha o que ja estava aberto nela.
+ * Um menu por vez, pelo mesmo motivo da tela interativa.
+ * @param {string} file
+ */
+export function toggleSizeMenu(file) {
+  const next = ui.openSizeMenuFile === file ? null : file;
+  closeSizeMenu();
+  if (!next) return;
+
+  ui.openSizeMenuFile = next;
+  const screen = screens.get(next);
+  screen?.card.classList.add('has-open-menu');
+  screen?.card.querySelector('.card-resize-btn')?.setAttribute('aria-expanded', 'true');
+}
+
+/** Fecha o menu de tamanho aberto, se houver algum. */
+export function closeSizeMenu() {
+  if (!ui.openSizeMenuFile) return;
+
+  const screen = screens.get(ui.openSizeMenuFile);
+  screen?.card.classList.remove('has-open-menu');
+  screen?.card.querySelector('.card-resize-btn')?.setAttribute('aria-expanded', 'false');
+  ui.openSizeMenuFile = null;
 }
 
 /**

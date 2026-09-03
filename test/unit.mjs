@@ -18,7 +18,7 @@ import { mimeTypeFor, resolveInside } from '../src/server/http.js';
 import { isForbiddenPreviewPath, isHtmlFile, isIgnoredDir, listScreens } from '../src/server/screens.js';
 import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
-  previewUrl, rectsOverlap, snapToGrid, sortNames,
+  previewUrl, rectsOverlap, resizeZoneAt, snapToGrid, sortNames,
 } from '../src/client/utils.js';
 
 /* ---------- cli.js ---------- */
@@ -234,6 +234,29 @@ test('findOverlaps devolve conjunto vazio quando esta tudo valido', () => {
     { file: 'a.html', x: 0, y: 0, width: 100, height: 100 },
     { file: 'b.html', x: 172, y: 0, width: 100, height: 100 },
   ]).size, 0);
+});
+
+/* ---------- Bordas que redimensionam ---------- */
+
+// Frame de 100x100 na tela, com folga de agarre de 8px.
+const frame = { x: 0, y: 0, width: 100, height: 100 };
+
+test('resizeZoneAt pega a quina quando as duas bordas estao perto', () => {
+  assert.equal(resizeZoneAt(98, 98, frame, 8), 'corner');
+  assert.equal(resizeZoneAt(103, 103, frame, 8), 'corner', 'um pouco alem da quina');
+});
+
+test('resizeZoneAt separa a borda direita da de baixo', () => {
+  assert.equal(resizeZoneAt(98, 50, frame, 8), 'right');
+  assert.equal(resizeZoneAt(50, 98, frame, 8), 'bottom');
+});
+
+test('resizeZoneAt ignora o miolo e o lado de fora', () => {
+  assert.equal(resizeZoneAt(50, 50, frame, 8), null, 'miolo');
+  assert.equal(resizeZoneAt(140, 50, frame, 8), null, 'longe a direita');
+  assert.equal(resizeZoneAt(50, 140, frame, 8), null, 'longe abaixo');
+  assert.equal(resizeZoneAt(-4, 50, frame, 8), null, 'a esquerda nao agarra');
+  assert.equal(resizeZoneAt(50, -4, frame, 8), null, 'o topo nao agarra');
 });
 
 /* ---------- computeXPath ---------- */

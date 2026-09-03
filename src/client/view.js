@@ -12,7 +12,8 @@ import { assignColumns, clamp, findOverlaps, rectsOverlap, snapToGrid } from './
 import { clearPositions, loadPositions, savePositions } from './storage.js';
 import {
   CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, GAP, GRID_SIZE,
-  MAX_SCALE, MIN_FRAME_WIDTH, MIN_SCALE,
+  MAX_FRAME_HEIGHT, MAX_FRAME_WIDTH, MAX_SCALE,
+  MIN_FRAME_HEIGHT, MIN_FRAME_WIDTH, MIN_SCALE,
 } from './constants.js';
 
 /** Escreve `view` no DOM. Toda mudanca de zoom ou pan termina aqui. */
@@ -174,6 +175,21 @@ function place(screen, x, y) {
 }
 
 /**
+ * Escreve o tamanho da tela no DOM. Todo redimensionamento de card termina
+ * aqui — a largura mora no `.card` e a altura no `.card-frame`, do mesmo jeito
+ * que a medida do conteudo escreve.
+ * @param {import('./state.js').Screen} screen
+ * @param {number} width
+ * @param {number} height
+ */
+function placeSize(screen, width, height) {
+  screen.frameWidth = width;
+  screen.frameHeight = height;
+  screen.card.style.width = `${width}px`;
+  screen.frame.style.height = `${height}px`;
+}
+
+/**
  * Desce a tela ate ela nao tapar nenhuma tela fixa.
  *
  * Uma passada so basta porque os obstaculos vem ordenados por `y` e cada colisao
@@ -230,6 +246,58 @@ export function moveScreen(file, x, y) {
   }
   place(screen, x, y);
   refreshOverlaps();
+}
+
+/**
+ * Redimensiona uma tela. Como so as bordas de baixo e da direita agarram, o
+ * canto de cima nao se mexe e nao ha `x`/`y` a recalcular.
+ *
+ * Redimensionar fixa a tela pelo mesmo motivo que mover fixa: o layout
+ * automatico decide a largura da coluna pela tela mais larga dela, e devolver
+ * a tela ao fluxo logo depois de o usuario escolher o tamanho a jogaria para
+ * outro lugar no mesmo gesto.
+ *
+ * Nao roda `layout()`: isto e chamado a cada `pointermove` do arrasto, e
+ * reposicionar o board inteiro nessa frequencia faria as outras telas
+ * tremerem debaixo do cursor. Quem fecha o gesto chama `finishResize`.
+ *
+ * @param {string} file
+ * @param {number} width
+ * @param {number} height
+ */
+export function resizeScreen(file, width, height) {
+  const screen = screens.get(file);
+  if (!screen) return;
+
+  screen.pinned = true;
+  screen.sized = true;
+  placeSize(
+    screen,
+    Math.round(clamp(width, MIN_FRAME_WIDTH, MAX_FRAME_WIDTH)),
+    Math.round(clamp(height, MIN_FRAME_HEIGHT, MAX_FRAME_HEIGHT)),
+  );
+  refreshOverlaps();
+}
+
+/**
+ * Fecha um redimensionamento: as telas que ainda escorrem se reacomodam em
+ * volta do novo tamanho, e a organizacao vira estado salvo.
+ */
+export function finishResize() {
+  layout();
+  persistPositions();
+}
+
+/**
+ * Aplica uma dimensao do menu de tamanho. Nao e gesto continuo, entao ja
+ * fecha o redimensionamento no mesmo passo.
+ * @param {string} file
+ * @param {number} width
+ * @param {number} height
+ */
+export function applyPresetSize(file, width, height) {
+  resizeScreen(file, width, height);
+  finishResize();
 }
 
 /* ---------- Desfazer / refazer o arrasto de tela ---------- */
@@ -299,17 +367,24 @@ export function redo() {
 }
 
 /**
- * Grava a organizacao atual. So posicao valida entra: uma tela largada em cima
- * de outra mantem no localStorage o ultimo lugar valido em que esteve.
+ * Grava a organizacao atual. So estado valido entra: uma tela largada — ou
+ * esticada — em cima de outra mantem no localStorage a ultima posicao e o
+ * ultimo tamanho validos em que esteve.
+ *
+ * O registro de cada tela e reescrito inteiro a partir do estado vivo dela,
+ * entao uma tela que voltou ao tamanho automatico perde o `width`/`height`
+ * salvo sem precisar de nenhuma limpeza a parte.
  */
 export function persistPositions() {
   const invalid = refreshOverlaps();
   const positions = loadPositions();
 
   for (const screen of screens.values()) {
-    if (screen.pinned && !invalid.has(screen.file)) {
-      positions[screen.file] = { x: screen.x, y: screen.y };
-    }
+    if (!screen.pinned || invalid.has(screen.file)) continue;
+
+    positions[screen.file] = screen.sized
+      ? { x: screen.x, y: screen.y, width: screen.frameWidth, height: screen.frameHeight }
+      : { x: screen.x, y: screen.y };
   }
   savePositions(positions);
 }

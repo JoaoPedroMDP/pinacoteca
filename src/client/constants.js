@@ -15,6 +15,45 @@ export const DEFAULT_FRAME_HEIGHT = 800;
 export const MIN_FRAME_HEIGHT = 400;
 export const MAX_FRAME_HEIGHT = 6400;
 
+/**
+ * Teto da largura no redimensionamento manual. Maior que `CARD_WIDTH`, que e
+ * so a viewport de referencia da medida automatica: pela mao do usuario faz
+ * sentido esticar o card ate uma tela ultra-wide.
+ */
+export const MAX_FRAME_WIDTH = 3840;
+
+/**
+ * Folga de agarre das bordas redimensionaveis, em px de tela. Em px de tela e
+ * nao de canvas de proposito: a faixa que o cursor precisa acertar tem de ter
+ * o mesmo tamanho em qualquer nivel de zoom.
+ */
+export const RESIZE_EDGE_PX = 8;
+
+/**
+ * Cursor de cada borda redimensionavel. Unico lugar que faz esse mapa: o hover
+ * do escudo e o arrasto em andamento leem daqui.
+ * @type {Record<import('./utils.js').ResizeZone, string>}
+ */
+export const RESIZE_CURSORS = {
+  right: 'ew-resize',
+  bottom: 'ns-resize',
+  corner: 'nwse-resize',
+};
+
+/**
+ * Dimensoes do menu de tamanho do card. Sao viewports de dispositivo comuns —
+ * a ideia e conferir o prototipo num tamanho conhecido sem ter de arrastar a
+ * borda ate acertar o numero. "Automatico" nao entra aqui: nao tem tamanho
+ * fixo, devolve a tela a medida do proprio conteudo.
+ * @type {Array<{ label: string, width: number, height: number }>}
+ */
+export const PRESET_FRAME_SIZES = [
+  { label: 'Mobile', width: 375, height: 667 },
+  { label: 'Tablet', width: 768, height: 1024 },
+  { label: 'Laptop', width: 1366, height: 768 },
+  { label: 'Desktop', width: 1920, height: 1080 },
+];
+
 /** Espaco entre cards, em px de canvas. */
 export const GAP = 72;
 

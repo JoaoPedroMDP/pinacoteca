@@ -278,6 +278,156 @@ await checkEventually('estado volta ao original apos desfazer outra vez',
 // o layout automatico para os testes seguintes, que dependem dele.
 await board.evaluate("document.querySelector('[data-action=\"rearrange\"]').click()");
 
+/* ---------- Redimensionar telas ---------- */
+
+// Arrasto de borda com os mesmos eventos que o navegador mandaria. O ponto de
+// partida sai da caixa desenhada do frame, entao o teste nao depende do zoom em
+// que o board parou; `dxExpr`/`dyExpr` sao px de *tela*, como o gesto real.
+/** @type {(file: string, zone: string, dxExpr: string, dyExpr: string) => string} */
+const dragFrameEdge = (file, zone, dxExpr, dyExpr) => `(() => {
+  const card = document.querySelector('.card[data-file="${file}"]');
+  const frame = card.querySelector('.card-frame');
+  const shield = card.querySelector('.card-shield');
+  const box = frame.getBoundingClientRect();
+  const dx = ${dxExpr};
+  const dy = ${dyExpr};
+
+  const zone = ${JSON.stringify(zone)};
+  const x = zone === 'bottom' ? box.left + box.width / 2 : box.right - 2;
+  const y = zone === 'right' ? box.top + box.height / 2 : box.bottom - 2;
+  const at = (clientX, clientY) => ({
+    pointerId: 9, button: 0, bubbles: true, cancelable: true, clientX, clientY,
+  });
+
+  shield.dispatchEvent(new PointerEvent('pointerdown', at(x, y)));
+  shield.dispatchEvent(new PointerEvent('pointermove', at(x + dx, y + dy)));
+  shield.dispatchEvent(new PointerEvent('pointerup', at(x + dx, y + dy)));
+
+  return {
+    width: Number.parseFloat(card.style.width),
+    height: Number.parseFloat(frame.style.height),
+    invalid: card.classList.contains('is-invalid'),
+  };
+})()`;
+
+/** @type {(file: string) => string} */
+const cardSize = (file) => `(() => {
+  const card = document.querySelector('.card[data-file="${file}"]');
+  return {
+    width: Number.parseFloat(card.style.width),
+    height: Number.parseFloat(card.querySelector('.card-frame').style.height),
+  };
+})()`;
+
+process.stdout.write('\nRedimensionar telas\n');
+
+const autoSize = await board.evaluate(cardSize('solo.html'));
+
+// Tira a tela de perto das outras antes de estica-la: assim o que o teste mede
+// e o redimensionamento, e nao a colisao com o vizinho.
+await board.evaluate(dragTitle('solo.html', 'box.width * 4', '0'));
+
+const wider = await board.evaluate(dragFrameEdge('solo.html', 'right', '120', '0'));
+check('arrastar a borda direita alarga o card', wider.width > autoSize.width,
+  `${autoSize.width} -> ${wider.width}`);
+check('borda direita nao mexe na altura', wider.height === autoSize.height);
+check('tamanho livre nao fica marcado como invalido', wider.invalid === false);
+
+const taller = await board.evaluate(dragFrameEdge('solo.html', 'corner', '40', '90'));
+check('arrastar a quina muda as duas dimensoes',
+  taller.width > wider.width && taller.height > wider.height,
+  JSON.stringify(taller));
+
+const afterResize = await stored();
+check('tamanho valido vai para o localStorage',
+  afterResize?.['solo.html']?.width === taller.width
+  && afterResize?.['solo.html']?.height === taller.height,
+  JSON.stringify(afterResize?.['solo.html']));
+
+// A vizinha precisa estar fixa: uma tela ainda no fluxo automatico escorreria
+// para longe no `layout()` do fim do gesto, e nao haveria sobreposicao nenhuma.
+await board.evaluate(dragTitle('dashboard.html', '0', '0'));
+
+// Encosta solo.html a esquerda de dashboard.html e depois estica por cima dela.
+await board.evaluate(dragTitle('solo.html',
+  "other('dashboard.html').left - box.left - box.width - 20",
+  "other('dashboard.html').top - box.top"));
+const overlapping = await board.evaluate(dragFrameEdge('solo.html', 'right', '200', '0'));
+check('tela esticada por cima de outra fica com contorno vermelho', overlapping.invalid === true);
+check('tamanho invalido nao e salvo',
+  (await stored())?.['solo.html']?.width === taller.width,
+  JSON.stringify((await stored())?.['solo.html']));
+
+await board.evaluate("document.querySelector('[data-action=\"rearrange\"]').click()");
+
+/* ---------- Menu de tamanho ---------- */
+
+process.stdout.write('\nMenu de tamanho\n');
+
+const openMenu = () => board.evaluate(
+  "document.querySelector('.card[data-file=\"solo.html\"] .card-resize-btn').click()");
+
+await openMenu();
+check('botao do titulo abre o menu de tamanho', (await board.evaluate(
+  "document.querySelectorAll('.card.has-open-menu').length")) === 1);
+
+// O menu abre por cima do frame, que vem depois dele no DOM: quem esta no ponto
+// e a prova de que da para clicar nas opcoes, e nao no vidro da tela.
+const menuOnTop = await board.evaluate(`(() => {
+  const menu = document.querySelector('.card[data-file="solo.html"] .card-size-menu');
+  const box = menu.getBoundingClientRect();
+  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+  return Boolean(hit?.closest('.card-size-menu'));
+})()`);
+check('menu aberto fica por cima do frame', menuOnTop === true);
+
+await board.evaluate(
+  "document.querySelector('.card[data-file=\"solo.html\"] .card-size-option[data-size=\"375x667\"]').click()");
+
+const preset = await board.evaluate(cardSize('solo.html'));
+check('preset redimensiona a tela', preset.width === 375 && preset.height === 667,
+  JSON.stringify(preset));
+check('menu fecha depois de escolher',
+  (await board.evaluate("document.querySelectorAll('.card.has-open-menu').length")) === 0);
+
+await openMenu();
+await board.evaluate(
+  "document.querySelector('.card[data-file=\"solo.html\"] .card-size-option[data-size=\"auto\"]').click()");
+
+await checkEventually('Automatico devolve a tela a medida do conteudo', async () => {
+  const size = await board.evaluate(cardSize('solo.html'));
+  return size.width === autoSize.width && size.height === autoSize.height;
+});
+check('tamanho automatico sai do localStorage',
+  (await stored())?.['solo.html']?.width === undefined);
+
+// O cursor e o unico aviso de que aquela faixa agarra: sem ele o usuario nao
+// descobre que a borda redimensiona.
+const cursors = await board.evaluate(`(() => {
+  const card = document.querySelector('.card[data-file="solo.html"]');
+  const shield = card.querySelector('.card-shield');
+  const box = card.querySelector('.card-frame').getBoundingClientRect();
+  const move = (clientX, clientY) => {
+    shield.dispatchEvent(new PointerEvent('pointermove', {
+      pointerId: 9, bubbles: true, cancelable: true, clientX, clientY,
+    }));
+    return shield.style.cursor;
+  };
+
+  return {
+    corner: move(box.right - 2, box.bottom - 2),
+    right: move(box.right - 2, box.top + box.height / 2),
+    bottom: move(box.left + box.width / 2, box.bottom - 2),
+    middle: move(box.left + box.width / 2, box.top + box.height / 2),
+  };
+})()`);
+check('cursor avisa a borda sob o mouse',
+  cursors.corner === 'nwse-resize' && cursors.right === 'ew-resize'
+  && cursors.bottom === 'ns-resize' && cursors.middle === '',
+  JSON.stringify(cursors));
+
+await board.evaluate("document.querySelector('[data-action=\"rearrange\"]').click()");
+
 /* ---------- Pan nao seleciona texto ---------- */
 
 // O sintoma era a selecao nativa do navegador: o arrasto do board grifava os

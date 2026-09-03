@@ -22,6 +22,10 @@
  * @property {number} y posicao no canvas, definida pelo layout ou pelo arrasto
  * @property {boolean} pinned true quando a posicao veio do usuario (arrasto ou
  *   localStorage). Tela fixa nao e movida pelo layout automatico.
+ * @property {boolean} sized true quando o *tamanho* veio do usuario (arrasto de
+ *   borda, preset ou localStorage). E para o tamanho o que `pinned` e para a
+ *   posicao: enquanto vale, `resizeToContent` nao remede a tela, senao a
+ *   proxima recarga do iframe desfaria a escolha do usuario.
  * @property {number} pendingScroll scroll interno a restaurar apos recarregar
  * @property {ReturnType<typeof setTimeout> | null} lateScan segunda passada de
  *   assets e de medida do conteudo
@@ -62,6 +66,8 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   normal e destaca o elemento sob ele.
  * - `interactiveFile`: a unica tela que esta recebendo cliques do usuario
  *   (duplo clique libera; `Esc` ou clique fora devolve o controle ao board).
+ * - `openSizeMenuFile`: a unica tela com o menu de tamanho aberto. Um por vez,
+ *   pelo mesmo motivo de `interactiveFile`.
  * - `snapToGrid`: liga o alinhamento a grade no arrasto de tela. Carregado do
  *   localStorage por `board.js` na carga inicial (`state.js` nao importa
  *   `storage.js` — a dependencia so anda numa direcao).
@@ -72,10 +78,15 @@ export const view = { scale: 1, x: 0, y: 0 };
  * @type {{
  *   mode: 'pan' | 'pointer',
  *   interactiveFile: string | null,
+ *   openSizeMenuFile: string | null,
  *   snapToGrid: boolean,
  *   lastChangedFiles: string[],
  * }}
  */
 export const ui = {
-  mode: 'pan', interactiveFile: null, snapToGrid: false, lastChangedFiles: [],
+  mode: 'pan',
+  interactiveFile: null,
+  openSizeMenuFile: null,
+  snapToGrid: false,
+  lastChangedFiles: [],
 };

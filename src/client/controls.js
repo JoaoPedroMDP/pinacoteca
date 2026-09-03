@@ -7,13 +7,17 @@
 import { toolbar, viewport } from './dom.js';
 import { screens, ui, view } from './state.js';
 import {
-  applyTransform, fitToScreen, moveScreen, panBy, persistPositions,
-  recordMove, redo, resetPositions, resetZoom, undo, zoomAt, zoomByStep,
+  applyTransform, finishResize, fitToScreen, moveScreen, panBy, persistPositions,
+  recordMove, redo, resetPositions, resetZoom, resizeScreen, undo, zoomAt, zoomByStep,
 } from './view.js';
-import { setInteractive } from './cards.js';
+import { closeSizeMenu, resetSizes, setInteractive } from './cards.js';
 import { adjustInspectLevel, clearHoverHighlight, hasHoverTarget } from './inspect.js';
 import { saveSnapToGrid } from './storage.js';
-import { PAN_DRAG_THRESHOLD, WHEEL_STEP, WHEEL_ZOOM_DAMPING, ZOOM_STEP } from './constants.js';
+import { resizeZoneAt } from './utils.js';
+import {
+  PAN_DRAG_THRESHOLD, RESIZE_CURSORS, RESIZE_EDGE_PX,
+  WHEEL_STEP, WHEEL_ZOOM_DAMPING, ZOOM_STEP,
+} from './constants.js';
 
 /**
  * Liga ou desliga o alinhamento a grade no arrasto de tela.
@@ -102,13 +106,37 @@ function canvasPoint(event) {
 }
 
 /**
- * A alca de arrasto de uma tela e o titulo dela.
+ * A alca de arrasto de uma tela e o titulo dela — menos o botao de tamanho e o
+ * menu dele, que sao para clicar, nao para arrastar.
  * @param {Event} event
  * @returns {string | null} o arquivo da tela, ou null se o gesto nasceu fora
  */
 function draggedFile(event) {
-  const title = /** @type {Element | null} */ (event.target)?.closest?.('.card-title');
+  const target = /** @type {Element | null} */ (event.target);
+  if (target?.closest?.('.card-resize-btn, .card-size-menu')) return null;
+
+  const title = target?.closest?.('.card-title');
   return title?.parentElement?.dataset.file ?? null;
+}
+
+/**
+ * O gesto nasceu numa borda que redimensiona?
+ * @param {PointerEvent} event
+ * @returns {{ file: string, screen: import('./state.js').Screen,
+ *   zone: import('./utils.js').ResizeZone } | null}
+ */
+function resizeTarget(event) {
+  const frame = /** @type {Element | null} */ (event.target)?.closest?.('.card-frame');
+  if (!frame) return null;
+
+  const file = /** @type {HTMLElement | null} */ (frame.parentElement)?.dataset.file;
+  const screen = file ? screens.get(file) : null;
+  if (!file || !screen) return null;
+
+  const zone = resizeZoneAt(
+    event.clientX, event.clientY, frame.getBoundingClientRect(), RESIZE_EDGE_PX,
+  );
+  return zone ? { file, screen, zone } : null;
 }
 
 /* ---------- Arrasto: pan do board ---------- */
@@ -136,7 +164,10 @@ viewport.addEventListener('pointerdown', (event) => {
   if (ui.mode === 'pointer' && event.button === 0) return;
   if (isInsideInteractiveCard(event)) return;
   // O titulo e a alca de arrasto da tela: ali o gesto move o card, nao o board.
-  if (draggedFile(event)) return;
+  // Vale o titulo inteiro, inclusive o botao de tamanho — que precisa do clique.
+  if (/** @type {Element} */ (event.target).closest?.('.card-title')) return;
+  // Nas bordas do frame o gesto redimensiona a tela.
+  if (resizeTarget(event)) return;
   // A toolbar fica dentro do viewport: sem isto o setPointerCapture abaixo
   // redirecionaria o clique para o viewport e os botoes nunca disparariam.
   if (/** @type {Element} */ (event.target).closest?.('.toolbar')) return;
@@ -264,9 +295,104 @@ function endDrag(event) {
 viewport.addEventListener('pointerup', endDrag);
 viewport.addEventListener('pointercancel', endDrag);
 
-// Clique no vazio sai do modo de interacao.
+/* ---------- Arrasto das bordas: redimensionar a tela ---------- */
+
+// Estado do gesto em andamento. Segue o padrao do pan, e nao o do titulo: o
+// limiar existe porque a borda do frame e justamente onde o usuario tenta o
+// duplo clique (liberar a tela) e o Alt+clique (XPath), e capturar o ponteiro
+// ja no pointerdown desviaria esses cliques para o viewport.
+/** @type {number | null} */
+let resizePointerId = null;
+let resizeFile = '';
+/** @type {import('./utils.js').ResizeZone} */
+let resizeZoneKind = 'corner';
+let resizeStartWidth = 0;
+let resizeStartHeight = 0;
+let resizeDownClientX = 0;
+let resizeDownClientY = 0;
+let resizeStarted = false;
+
+viewport.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.altKey) return;
+  if (isInsideInteractiveCard(event)) return;
+
+  const target = resizeTarget(event);
+  if (!target) return;
+
+  event.preventDefault();
+
+  resizePointerId = event.pointerId;
+  resizeFile = target.file;
+  resizeZoneKind = target.zone;
+  resizeStartWidth = target.screen.frameWidth;
+  resizeStartHeight = target.screen.frameHeight;
+  resizeDownClientX = event.clientX;
+  resizeDownClientY = event.clientY;
+  resizeStarted = false;
+});
+
+viewport.addEventListener('pointermove', (event) => {
+  if (event.pointerId !== resizePointerId) return;
+
+  // O deslocamento e uma *distancia*: o pan se cancela na subtracao, so a
+  // escala precisa ser desfeita para chegar a px de canvas.
+  const dx = (event.clientX - resizeDownClientX) / view.scale;
+  const dy = (event.clientY - resizeDownClientY) / view.scale;
+
+  if (!resizeStarted) {
+    if (Math.hypot(event.clientX - resizeDownClientX, event.clientY - resizeDownClientY)
+      < PAN_DRAG_THRESHOLD) return; // ainda pode virar clique
+    resizeStarted = true;
+    viewport.classList.add('is-resizing');
+    viewport.style.cursor = RESIZE_CURSORS[resizeZoneKind];
+    try {
+      viewport.setPointerCapture(event.pointerId);
+    } catch {
+      // Ponteiro sintetico (teste): os listeners no viewport dao conta do gesto.
+    }
+  }
+
+  // A borda de baixo nao mexe na largura, a da direita nao mexe na altura.
+  resizeScreen(
+    resizeFile,
+    resizeZoneKind === 'bottom' ? resizeStartWidth : resizeStartWidth + dx,
+    resizeZoneKind === 'right' ? resizeStartHeight : resizeStartHeight + dy,
+  );
+});
+
+/** Fim do redimensionamento: e aqui que o tamanho vira estado salvo. */
+/** @param {PointerEvent} event */
+function endResize(event) {
+  if (event.pointerId !== resizePointerId) return;
+
+  resizePointerId = null;
+  if (!resizeStarted) return; // clique: nunca capturou, nada a fechar
+
+  resizeStarted = false;
+  viewport.classList.remove('is-resizing');
+  viewport.style.cursor = '';
+
+  // Tamanho invalido (tela esticada por cima de outra) fica na tela, mas nao e salvo.
+  finishResize();
+
+  try {
+    viewport.releasePointerCapture(event.pointerId);
+  } catch {
+    // Ponteiro sintetico (teste) ou ja liberado: nada a fazer.
+  }
+}
+
+viewport.addEventListener('pointerup', endResize);
+viewport.addEventListener('pointercancel', endResize);
+
+// Clique no vazio sai do modo de interacao e fecha o menu de tamanho.
 viewport.addEventListener('click', (event) => {
   if (ui.interactiveFile && !isInsideInteractiveCard(event)) setInteractive(null);
+
+  const target = /** @type {Element | null} */ (event.target);
+  if (ui.openSizeMenuFile && !target?.closest?.('.card-resize-btn, .card-size-menu')) {
+    closeSizeMenu();
+  }
 });
 
 /* ---------- Toolbar ---------- */
@@ -278,7 +404,8 @@ toolbar.addEventListener('click', (event) => {
   else if (action === 'zoom-out') zoomByStep(1 / ZOOM_STEP);
   else if (action === 'zoom-reset') resetZoom();
   else if (action === 'fit') fitToScreen();
-  else if (action === 'rearrange') resetPositions();
+  // "Reorganizar" apaga a organizacao inteira, e tamanho manual faz parte dela.
+  else if (action === 'rearrange') { resetSizes(); resetPositions(); }
   else if (action === 'toggle-mode') setMode(ui.mode === 'pointer' ? 'pan' : 'pointer');
   else if (action === 'toggle-snap') setSnapToGrid(!ui.snapToGrid);
 });
@@ -354,7 +481,10 @@ window.addEventListener('keydown', (event) => {
   // Os atalhos abaixo nao disputam com os do navegador.
   if (event.metaKey || event.ctrlKey || event.altKey) return;
 
-  if (event.key === 'Escape') setInteractive(null);
+  if (event.key === 'Escape') {
+    setInteractive(null);
+    closeSizeMenu();
+  }
   else if (event.key === '0') fitToScreen();
   else if (event.key === '1') resetZoom();
   else if (event.key === '+' || event.key === '=') zoomByStep(ZOOM_STEP);

@@ -241,7 +241,10 @@ body {
 }
 
 .card-title {
-  display: block;
+  position: relative; /* ancora o menu de tamanho */
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding: 0 2px;
   color: var(--text-muted);
   font-size: 16px;
@@ -263,9 +266,6 @@ body {
    * truncar quando o zoom aperta — o completo fica no tooltip do card.
    */
   width: calc(100% * var(--scale, 1));
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
   /*
    * O espaco ate o card e um `margin-bottom` (layout, em px de canvas), fora do
    * transform: ele escala junto com o board, entao a distancia entre titulo e tela
@@ -282,6 +282,93 @@ body {
 
 #viewport.is-dragging .card-title {
   cursor: grabbing;
+}
+
+/* O nome trunca; o `min-width: 0` e o que deixa um item flex encolher abaixo
+   do proprio conteudo — sem ele o botao seria empurrado para fora do card. */
+.card-title-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.card-resize-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 8%);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.card-resize-btn:hover,
+.card-resize-btn[aria-expanded="true"] {
+  background: rgb(255 255 255 / 18%);
+}
+
+/* Menu de tamanho: mora dentro do titulo, que ja e contra-escalado — assim
+   sai do mesmo tamanho na tela em qualquer zoom, sem calculo em px de tela. */
+.card-size-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 5;
+  display: none;
+  min-width: 150px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgb(27 30 36 / 96%);
+  backdrop-filter: blur(6px);
+}
+
+.card.has-open-menu .card-size-menu {
+  display: flex;
+  flex-direction: column;
+}
+
+/* O card e `position: absolute` sem z-index: sem isto o menu aberto ficaria
+   atras de um card montado depois dele. */
+.card.has-open-menu {
+  z-index: 1;
+}
+
+/*
+ * O `transform` do titulo cria um contexto de empilhamento: o `z-index` do menu
+ * so vale la dentro, nao contra o frame. E o frame vem depois do titulo no DOM
+ * e tambem e posicionado, entao pintava por cima do menu aberto. Levantar o
+ * *titulo* inteiro e o que tira o menu de baixo da tela.
+ */
+.card.has-open-menu .card-title {
+  z-index: 1;
+}
+
+.card-size-option {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-size-option:hover {
+  background: #262b33;
 }
 
 .card.is-interactive .card-title {
