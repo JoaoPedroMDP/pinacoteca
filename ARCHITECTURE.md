@@ -379,6 +379,19 @@ do meio ainda move); ao passar o mouse sobre um card, o elemento sob o cursor fi
 os demais daquele card recebem `.pina-dim` (blur). O alvo
 em foco ainda recebe `.pina-focus` (outline azul), para deixar claro o limite do elemento.
 
+
+Um iframe focado engole o teclado: enquanto o cursor do usuário está digitando dentro de uma
+tela liberada, os listeners do board nunca disparam. Por isso `controls.js` expõe
+`bindFrameKeys`, e `cards.js` a chama no `load` de cada iframe — documento novo, `contentWindow`
+nova, nenhum listener duplicado a remover. Ali dentro só valem dois atalhos: **`Alt`** (segura o
+ponteiro) e **`Esc`** (devolve o controle ao board). Espaço, `0`, `1`, `+` e `-` ficam de fora de
+propósito — são caracteres que o usuário pode estar digitando num campo do protótipo, e
+sequestrá-los quebraria justamente o que o modo interativo existe para permitir.
+
+No modo ponteiro o escudo volta mesmo sobre a tela liberada (`#viewport.is-pointer
+.card.is-interactive .card-shield`), senão segurar `Alt` de dentro do protótipo ligaria o modo
+sem nada para destacar. Soltar a tecla esconde o escudo de novo e a tela continua interativa.
+
 O destaque é feito dentro do iframe (mesma origem): um `<style>` é injetado no `load` de cada
 tela, e a cada movimento o `elementFromPoint` do iframe — com as coordenadas do board
 convertidas de volta ao espaço interno — diz qual elemento está sob o cursor. Esse é o alvo

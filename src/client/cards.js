@@ -11,6 +11,9 @@ import { clamp, previewUrl, resizeZoneAt } from './utils.js';
 import { applyPresetSize, centerOn, layout, persistPositions } from './view.js';
 import { setCurrent } from './sidebar.js';
 import { clearHoverHighlight, copyXPathAt, injectInspectStyle, onInspectMove } from './inspect.js';
+// Ciclo com `controls.js` (ele importa `setInteractive` daqui). E seguro: nenhum
+// dos dois chama o outro durante a avaliacao do modulo, so dentro de listener.
+import { bindFrameKeys } from './controls.js';
 import { savedPosition } from './storage.js';
 import {
   CARD_WIDTH, DEFAULT_FRAME_HEIGHT, LATE_ASSET_SCAN_MS,
@@ -290,6 +293,9 @@ export function createCard(file) {
     screen.assets = collectAssets(screen);
     // O estilo do destaque some com o documento anterior; reinjeta.
     injectInspectStyle(iframe.contentDocument);
+    // Documento novo, `contentWindow` nova: o teclado precisa ser religado, senao
+    // o Alt para de segurar o ponteiro assim que o foco entra na tela.
+    bindFrameKeys(iframe.contentWindow);
 
     // Segunda passada: o `load` do iframe nao e o fim da historia. Fonte web,
     // imagem tardia e conteudo montado por JS chegam depois dele, e a medida

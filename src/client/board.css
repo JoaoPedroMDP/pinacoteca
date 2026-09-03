@@ -433,6 +433,12 @@ body {
   display: none;
 }
 
+/* ...menos no modo ponteiro: ali o escudo volta mesmo na tela liberada, senao o
+   Alt segurado de dentro do prototipo ligaria o modo sem nada para destacar. */
+#viewport.is-pointer .card.is-interactive .card-shield {
+  display: block;
+}
+
 /* ---------- Toolbar e avisos ---------- */
 
 .toolbar {

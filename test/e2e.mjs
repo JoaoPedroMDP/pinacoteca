@@ -187,6 +187,32 @@ await board.evaluate(gesture("MouseEvent('dblclick'"));
 await checkEventually('duplo clique libera o card para interagir',
   () => board.evaluate("document.querySelectorAll('.card.is-interactive').length === 1"));
 
+// Teclado de dentro do iframe: com o foco no prototipo, os listeners do board
+// nao disparam — quem atende sao os registrados na `contentWindow`.
+/** @type {(expr: string) => string} */
+const inLoginFrame = (expr) => `[...document.querySelectorAll('.card')]
+  .find((c) => c.querySelector('iframe').src.includes('login.html'))
+  .querySelector('iframe').contentWindow.${expr}`;
+
+await board.evaluate(inLoginFrame("dispatchEvent(new KeyboardEvent('keydown', { key: 'Alt' }))"));
+check('Alt de dentro do card interativo segura o ponteiro', await board.evaluate(isPointerMode));
+check('no ponteiro o escudo volta sobre a tela liberada',
+  await board.evaluate(
+    "getComputedStyle(document.querySelector('.card.is-interactive .card-shield')).display !== 'none'"));
+
+await board.evaluate(inLoginFrame("dispatchEvent(new KeyboardEvent('keyup', { key: 'Alt' }))"));
+check('soltar o Alt dentro do card volta ao modo anterior',
+  (await board.evaluate(isPointerMode)) === false);
+
+await board.evaluate(inLoginFrame("dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))"));
+await checkEventually('Esc de dentro do card devolve o controle ao board',
+  () => board.evaluate("document.querySelectorAll('.card.is-interactive').length === 0"));
+
+// De novo interativo, agora para conferir o mesmo Esc vindo do board.
+await board.evaluate(gesture("MouseEvent('dblclick'"));
+await checkEventually('duplo clique libera o card de novo',
+  () => board.evaluate("document.querySelectorAll('.card.is-interactive').length === 1"));
+
 await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))");
 await checkEventually('Esc devolve o controle ao board',
   () => board.evaluate("document.querySelectorAll('.card.is-interactive').length === 0"));

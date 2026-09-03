@@ -497,3 +497,46 @@ window.addEventListener('keyup', (event) => {
 
 // Perder o foco solta a tecla sem disparar keyup: nao deixa preso no modo.
 window.addEventListener('blur', releaseHeldMode);
+
+/**
+ * Liga o teclado dentro de uma tela liberada para clique.
+ *
+ * Um iframe focado engole o teclado: enquanto o cursor do usuario esta dentro
+ * do prototipo, os listeners de cima nunca disparam. Por isso os atalhos que
+ * precisam funcionar *de dentro* sao registrados tambem na janela do iframe —
+ * mesma origem, mesmo padrao de `injectInspectStyle`.
+ *
+ * So dois atalhos, e de proposito: `Alt` segura o ponteiro e `Escape` devolve o
+ * controle ao board. Os outros (espaco, `0`, `1`, `+`, `-`) sao caracteres que
+ * o usuario pode estar digitando num campo do prototipo — sequestra-los ali
+ * quebraria justamente o que o modo interativo existe para permitir.
+ *
+ * Chamado a cada `load`: o documento novo traz uma `contentWindow` nova, entao
+ * nao ha listener duplicado a remover.
+ *
+ * @param {Window | null} frameWindow
+ */
+export function bindFrameKeys(frameWindow) {
+  try {
+    if (!frameWindow) return;
+
+    frameWindow.addEventListener('keydown', (event) => {
+      if (event.key === 'Alt') {
+        if (holdMode('Alt', 'pointer')) event.preventDefault();
+      } else if (event.key === 'Escape') {
+        setInteractive(null);
+        closeSizeMenu();
+      }
+    });
+
+    frameWindow.addEventListener('keyup', (event) => {
+      if (event.key === heldKey) releaseHeldMode();
+    });
+
+    // Sair do iframe (para o board ou para outra janela) solta a tecla sem
+    // keyup, do mesmo jeito que o `blur` do board.
+    frameWindow.addEventListener('blur', releaseHeldMode);
+  } catch {
+    // Iframe trocando de `src` no meio: a proxima carga registra de novo.
+  }
+}
