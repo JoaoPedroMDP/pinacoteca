@@ -1,3 +1,13 @@
+## 0.9.0 (2026-09-03)
+
+### Feat
+
+- Responsividade
+
+### Fix
+
+- Clicar duas vezes em cima de uma janela agora permite interagir com o conteúdo da janela
+
 ## 0.8.0 (2026-08-05)
 
 ### Feat
