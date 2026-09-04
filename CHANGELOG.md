@@ -2,21 +2,11 @@
 
 ### Feat
 
-- Conversa com o modelo: aba de chat com um agente que edita a pasta observada
-- Barra lateral redimensionável pelo puxador entre ela e o board
+- Claude code integrado
 
 ### Fix
 
-- A aba de conversa agora ocupa a altura inteira da barra lateral
-- Aviso quando a máquina já tem sessão do Claude Code (plano Pro/Max) e não precisa de chave de API
-- Linha de botões do compositor não corta mais numa barra lateral estreita
-- Espaço volta a funcionar dentro do campo de texto da conversa
-- Sessão do `claude login` (plano Pro/Max) volta a ser detectada de verdade, não só por variável de ambiente
-- Pedido de permissão mostra o nome da ferramenta e o comando com destaque, e os botões ficam no canto do cabeçalho
-- Aprovação automática vira um seletor Auto/Manual, em vez de botão de alternância
-- Campo de texto da conversa não abre mais cortado pela metade
-- Seletores de modelo, esforço e aprovação viram pills
-- Modo de envio (Enter/Shift+Enter) vira um badge no botão Enviar, com toast ao alternar
+- Agora modo ponteiro pode ser ativado com Alt de dentro de um iFrame
 
 ## 0.9.0 (2026-09-03)
 
