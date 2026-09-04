@@ -5,14 +5,27 @@
 **pinacoteca** — visualizador de protótipos HTML. Roda em uma pasta, encontra todos os
 `.html` dela e mostra todos lado a lado num board com zoom e pan.
 
-É **somente leitura sobre a pasta observada**: não edita, não cria e não apaga arquivo
-nenhum lá dentro. O único trabalho da ferramenta é mostrar o estado atual do disco,
-sempre atualizado. A única coisa que ela lembra é como o usuário organizou as telas no
-canvas, e isso vive no `localStorage` do navegador — não em arquivo (veja
-"Organização das telas").
+O board é a maneira de **ver** o que está no disco. Essa parte não escreve nada, e isso
+continua valendo inteiro: a varredura só lê a pasta, o watcher só observa, e `/preview/`
+só devolve o arquivo cru. Olhar nunca muda o que está sendo olhado.
+
+O que mudou é que existe um segundo modo, na aba **Conversa**: o usuário pede algo a um
+agente, e é *ele* quem escreve na pasta observada — cria e reescreve os HTMLs que o board
+mostra logo em seguida. Escrever nunca é efeito colateral de olhar; é sempre consequência
+de uma frase que o usuário digitou, cada edição passa por uma aprovação (veja "Aprovação
+por edição"), e nem com a aprovação automática ligada o agente escreve fora da raiz
+observada.
+
+A **ferramenta** continua não sujando a pasta: o que ela própria guarda fica fora dali. A
+organização das telas, o rascunho e o histórico da conversa vivem no `localStorage` do
+navegador (veja "Organização das telas"); a chave da API e as preferências do agente
+vivem em `~/.config/pinacoteca/config.json` (veja "A chave fora da pasta e fora do
+navegador"). Nenhum arquivo de metadado nasce no diretório dos protótipos.
 
 Caso de uso: o usuário deixa o board aberto em um segundo monitor enquanto um agente
-gera e reescreve os HTMLs. As telas se atualizam sozinhas, sem F5, sem clicar em nada.
+gera e reescreve os HTMLs. As telas se atualizam sozinhas, sem F5, sem clicar em nada. O
+agente pode ser o da aba Conversa ou outro qualquer rodando no terminal ao lado — o board
+não distingue os dois, porque só observa o disco.
 
 ## Decisões técnicas
 
@@ -31,9 +44,13 @@ bloqueia `fetch` e `EventSource`, e caminhos relativos de CSS/imagem ficam incon
 
 ### SSE, não WebSocket
 
-O fluxo é unidirecional: servidor avisa o navegador que um arquivo mudou. `EventSource`
-resolve isso em poucas linhas e reconecta sozinho se o servidor reiniciar. WebSocket só
-se justificaria se o board precisasse mandar comandos de volta — não precisa.
+O fluxo do board é unidirecional: servidor avisa o navegador que um arquivo mudou.
+`EventSource` resolve isso em poucas linhas e reconecta sozinho se o servidor reiniciar.
+WebSocket só se justificaria se esse canal precisasse levar comandos de volta — não
+precisa. A conversa, que de fato manda coisas ao servidor, não usa este canal: ela vai por
+`POST`, e a resposta de cada turno é o stream dele (veja "O stream da conversa é SSE
+escrito à mão sobre `POST`"). Dois fluxos separados continuam mais simples do que um
+socket que serve aos dois.
 
 ### Recarregar o iframe, nunca a página
 
@@ -79,6 +96,157 @@ fica de fora até o próximo recarregamento.
 Sem React, sem bundler. O board é DOM direto, CSS `transform` para zoom/pan e um punhado
 de listeners. A superfície do produto é pequena demais para pagar o custo de build.
 
+### Claude Agent SDK, não um loop de tools na mão
+
+A conversa roda sobre `@anthropic-ai/claude-agent-sdk` — o Claude Code usado como
+biblioteca —, e não sobre o `@anthropic-ai/sdk` com um laço de tool-use escrito aqui.
+
+O que se compraria escrevendo o laço: nada que este produto queira. O agente precisa ler
+arquivo, escrever arquivo, editar trecho, listar pasta, rodar comando, continuar de onde
+parou numa segunda mensagem e ainda pedir permissão antes de cada escrita. Isso é o
+Claude Code inteiro; reimplementá-lo daria um segundo produto para manter dentro deste.
+
+O preço é real e vale ser dito: **a segunda dependência de runtime**, ao lado do
+`chokidar`, num pacote que se orgulhava de ter uma só. Ela é grande, traz o binário do
+Claude Code junto e é a única coisa pesada de um `npx pinacoteca`. Foi aceito porque a
+alternativa não era "sem dependência", era "com o `@anthropic-ai/sdk` mais o laço, as
+tools de arquivo e a máquina de permissão escritos e testados aqui".
+
+Uma consequência de fronteira: `agent.js` é a única parte do servidor que conhece o SDK.
+Tudo que sai dele são os eventos de `ChatEvent`, que são nossos. Trocar de motor
+reescreveria `agent.js` e mais nada.
+
+### A chave fora da pasta e fora do navegador
+
+A chave da API vive em `~/.config/pinacoteca/config.json`, com o diretório em `700` e o
+arquivo em `600`. Os dois lugares óbvios foram recusados:
+
+- **na pasta observada**, um `.pinacoteca.json` com a chave dentro seria um segredo no
+  diretório de trabalho do usuário — commitado sem querer no primeiro `git add .`, e
+  servido por engano se o `/preview/` algum dia deixasse passar um arquivo oculto;
+- **no `localStorage`**, a chave ficaria em texto claro em um armazenamento que qualquer
+  coisa rodando naquela origem lê, e precisaria ser mandada em cada requisição. Além
+  disso, a preferência seria por navegador: o mesmo servidor, aberto em duas máquinas,
+  teria duas chaves e nenhuma verdade.
+
+O caminho respeita `XDG_CONFIG_HOME` (e `APPDATA` no Windows) — é o que permite ao e2e
+apontar a configuração para uma pasta temporária e nunca tocar na do usuário.
+
+A chave **nunca volta ao navegador**. As rotas de configuração respondem `publicConfig`,
+uma projeção em que `apiKey` foi trocada por um booleano `hasKey`. O board sabe se existe
+uma chave — é disso que ele precisa para decidir se mostra o painel de configuração —, e
+não sabe qual é. Vale para `GET` e também para a resposta do `POST` que acabou de gravá-la:
+uma projeção que só existisse num dos caminhos vazaria no outro.
+
+Do mesmo arquivo saem `model`, `effort`, `autoApprove` e `sendOnEnter`. Eles ficam lá, e
+não no navegador, porque **o servidor é o dono da configuração**: dois boards abertos na
+mesma pinacoteca têm de ver a mesma escolha, e só o servidor pode saber qual é. O
+`localStorage` guarda uma cópia com um papel menor — é o valor mostrado nos seletores
+enquanto o `GET /api/chat/config` não responde, para eles não piscarem vazios na carga.
+Quando a resposta chega, `applyServerConfig` corrige o que divergir e regrava a cópia.
+
+`mergeConfig` é pura e é onde a validação acontece: campo ausente mantém o valor atual,
+valor de tipo errado ou fora de `MODELS`/`EFFORTS` cai no valor atual e só então no padrão
+— um patch estragado não apaga uma escolha boa que já estava gravada. Ler é tolerante a
+falha pelo mesmo motivo que o `storage.js` do cliente é: arquivo ausente, JSON estragado
+ou permissão negada devolvem os padrões em vez de derrubar o servidor.
+
+### O stream da conversa é SSE escrito à mão sobre `POST`
+
+O turno chega ao navegador como `text/event-stream`, escrito linha a linha na resposta de
+um `POST /api/chat/message`, e é lido com `fetch` + o reader do corpo. Duas recusas
+explicadas:
+
+- **`EventSource` não serve** porque não faz `POST`. A mensagem do usuário pode ser
+  longa e o turno precisa do `sessionId`; enfiar isso numa query string seria contorcer o
+  transporte para caber na API do navegador.
+- **O `SseHub` não serve** porque ele é *broadcast*: existe para avisar todos os boards
+  abertos que um arquivo mudou. Este stream pertence a **uma requisição** — é a resposta
+  daquele `POST`, para aquela aba, e morre com ela. Empurrá-lo pelo hub obrigaria a
+  endereçar destinatário dentro de um canal que foi feito para não ter destinatário.
+
+O corte dos eventos é feito por `parseSseChunk`, que é pura: recebe o resto do pedaço
+anterior mais o pedaço novo e devolve os eventos fechados e o novo resto. Um JSON cortado
+no meio de um chunk fica guardado até o terminador chegar, em vez de virar erro de parse.
+
+Fechar a aba no meio do turno interrompe o agente (`req.on('close')`): sem isso o modelo
+continuaria trabalhando e gastando dinheiro com ninguém do outro lado. Pelo mesmo motivo
+o botão Parar avisa o servidor **e** aborta a leitura local — só abortar aqui deixaria o
+turno vivo lá.
+
+### Aprovação por edição, e o cadeado que não tem toggle
+
+Toda tool passa pelo `canUseTool` do SDK. O padrão é **aprovar por edição**: o servidor
+emite um evento `permission` com o nome da tool e um diff legível, e a Promise daquele
+`canUseTool` só resolve quando o usuário clicar. É o preço de um agente que escreve na
+pasta de trabalho de alguém — a primeira vez que ele reescrever a tela errada, o usuário
+quer ter visto o diff antes.
+
+O toggle **automático** desliga a pergunta, e existe porque a alternativa é pior: numa
+sessão de vinte edições seguidas, um usuário que precisa clicar vinte vezes aprende a
+clicar sem ler, e a aprovação vira teatro. Ele é preferência da conversa e vive na
+configuração do servidor, junto da chave — não no `localStorage` —, porque quem decide se
+uma escrita acontece é o lado que escreve.
+
+**`escapingPath` é o cadeado, e ele nega escrita fora da raiz mesmo com o automático
+ligado.** Ele roda *antes* de qualquer aprovação, compara os campos de caminho da entrada
+da tool (`file_path`, `path`, `notebook_path`) com a raiz observada, e uma tool que
+aponte para fora é recusada sem perguntar a ninguém.
+
+O motivo é concreto: o `cwd` do SDK *orienta* o agente — é dele que o Bash parte —, mas
+não o **limita**. O `Write` monta caminho absoluto sozinho, e isso aconteceu de verdade
+num teste: o modelo escreveu num caminho absoluto fora da pasta observada, achando que
+estava dentro dela. Um `cwd` não é uma jaula, e tratar como se fosse era o bug.
+
+Duas consequências assumidas: uma permissão que ninguém responde não pode segurar o
+processo do SDK para sempre, então abortar o turno resolve as pendentes como recusa; e o
+agente não consegue ler nada fora da raiz — inclusive quando o usuário queria, o que é
+uma limitação real e é preferível ao contrário.
+
+### `agentEnv`: a chave escolhida tem de ser a chave usada
+
+O processo do SDK recebe o ambiente do servidor. Se há chave configurada na pinacoteca,
+`agentEnv` a coloca em `ANTHROPIC_API_KEY` e **apaga as credenciais de ambiente** que o
+Claude Code também aceita (`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
+`ANTHROPIC_PROFILE`).
+
+O motivo é diagnóstico, não segurança: numa máquina já logada no Claude Code, o SDK
+autenticaria por aquela credencial e a chave escolhida aqui nunca seria usada. Uma chave
+errada colada na interface funcionaria — até o usuário rodar em outra máquina e a conversa
+parar sem explicação. Apagando, o que ele escolheu é o que vale, e um erro de chave
+aparece na primeira mensagem.
+
+Sem chave configurada, ao contrário, o ambiente **passa inteiro**, de propósito: numa
+máquina já autenticada no Claude Code a conversa funciona sem o usuário colar chave
+nenhuma, e limpar essas variáveis ali removeria a única credencial que existe.
+`hasCredential` reconhece esse caso — o turno só recusa começar quando não há nem chave
+gravada nem credencial no ambiente, e aí a mensagem de erro diz o que fazer em vez de
+deixar o SDK morrer com um erro de autenticação.
+
+Essa mesma detecção (`hasAmbientCredential`) chega ao navegador: `GET`/`POST
+/api/chat/config` devolvem um campo `hasAmbientCredential` ao lado de `hasKey`. Sem ele, um
+usuário com plano Pro/Max já logado no Claude Code veria o campo de chave vazio e assumiria
+que precisa colar uma — e, com ela, pagaria por crédito de API que a assinatura já cobre. O
+painel de configuração mostra um aviso (`chat.js`, `setHasAmbientCredential`) explicando que
+a sessão já basta, mas continua com o campo de chave à mão: colar uma ali é a forma de
+escolher crédito de API mesmo tendo sessão — por exemplo, para não gastar a cota do plano.
+
+`hasAmbientCredential` não olha só variável de ambiente: o `claude login` de verdade não
+exporta nenhuma das de cima, ele grava a sessão em `~/.claude/.credentials.json` (ou
+`$CLAUDE_CONFIG_DIR/.credentials.json`), e é de lá que o SDK autentica quando não há
+`ANTHROPIC_API_KEY` no ambiente — mesma resolução de caminho nos dois lados. Por isso a
+função checa esse arquivo além das variáveis; a versão que só olhava o ambiente relatava
+"sem credencial" numa máquina logada de verdade, e o turno morria com o erro genérico da
+falta de chave antes até de tentar. `fileExists` entra como parâmetro injetável (padrão
+`existsSync`) só para o teste de unidade não depender do disco real; os testes ponta a
+ponta isolam a sessão real do desenvolvedor apontando `CLAUDE_CONFIG_DIR` para uma pasta
+temporária vazia, do mesmo jeito que já isolam `XDG_CONFIG_HOME`.
+
+Esse campo não entra em `publicConfig`: ele não é gravado em `config.json`, é uma
+capacidade do **processo do servidor** naquele instante. Por isso é composto na rota
+(`src/server/index.js`), não em `config.js` — `config.js` continua sabendo só do que está
+em disco.
+
 ## Componentes
 
 ### CLI (`bin/pinacoteca.js` + `src/cli.js`)
@@ -111,9 +279,18 @@ desenvolvimento, onde sempre há algo escutando em porta redonda.
 | `src/server/screens.js` | descoberta das telas e a política de "o que é um protótipo" |
 | `src/server/watcher.js` | `chokidar` traduzido em eventos do board |
 | `src/server/sse.js` | o canal aberto com cada board |
+| `src/server/config.js` | `~/.config/pinacoteca/config.json`: chave, modelo, esforço e preferências |
+| `src/server/agent.js` | a ponte com o Claude Agent SDK: um turno, as tools e as permissões |
 
 Rota nova entra em `createRequestHandler`. Se ela precisar de algo que qualquer outra
-rota também usaria, isso desce para `http.js`.
+rota também usaria, isso desce para `http.js` — foi assim que `readJsonBody` (com teto de
+corpo, porque corpo sem limite é um jeito bobo de travar o processo) nasceu lá e não numa
+rota.
+
+`config.js` e `agent.js` não se conhecem pela metade: `agent.js` importa a configuração,
+e `config.js` não sabe que existe um agente. As duas funções que decidem algo sozinhas
+(`mergeConfig`, `escapingPath`, `buildDiff`, `translateMessage`, `agentEnv`,
+`hasCredential`) são puras e estão no `test/unit.mjs`; o resto é IO e stream.
 
 `screens.js` decide duas coisas com a mesma regra: o que a varredura ignora e o que
 `/preview/` recusa servir. Elas moram juntas de propósito — se divergirem, a ferramenta
@@ -130,6 +307,29 @@ lugar só, no `send` de `http.js`, e não em cada rota.
 | Servir o board | `GET /` devolve a aplicação; `GET /app/*` devolve o CSS e o JS dela |
 | Listar telas | `GET /api/screens` devolve os arquivos encontrados, a raiz e a versão do pacote |
 | Empurrar eventos | `GET /events` é o stream SSE |
+| Guardar a configuração | `GET`/`POST /api/chat/config` leem e gravam o arquivo de configuração — sempre pela projeção `publicConfig`, sem a chave |
+| Conversar | `POST /api/chat/message` roda um turno e escreve os eventos dele na própria resposta |
+| Obedecer ao Parar | `POST /api/chat/interrupt` aborta o turno em andamento daquela sessão |
+| Responder a permissão | `POST /api/chat/permission` destrava o `canUseTool` que estava esperando |
+
+Rotas, na íntegra:
+
+| Rota | Corpo | Resposta |
+| --- | --- | --- |
+| `GET /` | — | a página do board |
+| `GET /app/*` | — | CSS e JS do board |
+| `GET /api/screens` | — | `{ root, version, screens }` |
+| `GET /events` | — | stream SSE das mudanças da pasta |
+| `GET /preview/*` | — | o arquivo cru do protótipo ou de um asset dele |
+| `GET /api/chat/config` | — | `{ hasKey, model, effort, autoApprove, sendOnEnter }` — nunca a chave |
+| `POST /api/chat/config` | `{ apiKey?, model?, effort?, autoApprove?, sendOnEnter? }` | igual ao `GET` |
+| `POST /api/chat/message` | `{ sessionId, text }` | `text/event-stream` com os eventos da conversa |
+| `POST /api/chat/interrupt` | `{ sessionId }` | `{ ok: true }` |
+| `POST /api/chat/permission` | `{ sessionId, requestId, allow }` | `{ ok: true }` |
+
+**`POST` existe só embaixo de `/api/chat/`.** O resto do servidor continua respondendo
+apenas `GET` e `HEAD`, e o roteador separa os dois mundos na primeira linha: quem não
+começa com o prefixo da conversa passa pelo guarda de método de sempre.
 
 Eventos SSE emitidos:
 
@@ -171,6 +371,33 @@ escrevendo parou. É um evento sobre a pasta, não sobre um arquivo, e por isso 
 vazio. Ele não substitui a recarga imediata — o board recarrega na hora, para o usuário
 ver a mudança acontecendo; o `settled` confere o resultado final depois.
 
+#### Os eventos da conversa
+
+O stream de `POST /api/chat/message` é outro contrato, com outro formato: um JSON por
+linha `data:`. Ele é gerado em `agent.js` (`ChatEvent`) e consumido em `chat-client.js`
+(`applyEvent`); tipo novo entra nos dois e nesta tabela, ou em nenhum.
+
+```
+{ "type": "session",     "sessionId": "..." }                       // sempre o primeiro
+{ "type": "text",        "delta": "..." }                           // resposta, em pedaços
+{ "type": "thinking",    "delta": "..." }                           // raciocínio, em pedaços
+{ "type": "tool",        "id": "...", "name": "Edit", "input": { } }
+{ "type": "tool-result", "id": "...", "ok": true, "summary": "..." }
+{ "type": "permission",  "requestId": "...", "toolName": "Edit", "input": { }, "diff": "..." }
+{ "type": "error",       "message": "..." }
+{ "type": "done",        "stopReason": "end_turn" }                 // sempre o último, sempre um
+```
+
+Duas garantias que o cliente pode assumir: o `session` vem antes de tudo (é ele que dá o
+`sessionId` de uma conversa nova), e sai **exatamente um** `done` por turno — por
+resposta, por erro ou por interrupção. É o que permite ao board fechar o balão sem contar
+casos. Um evento desconhecido é ignorado pelo cliente em vez de virar erro no log: um
+board mais velho conversando com um servidor mais novo perde o recurso, não a conversa.
+
+O texto e o raciocínio saem dos eventos parciais do SDK, e por isso a mensagem
+`assistant` completa contribui só com os `tool_use` — sem esse cuidado cada resposta
+apareceria duas vezes.
+
 ### Cliente (board)
 
 Sem framework e sem bundler, mas dividido em módulos ES nativos. `index.html` carrega só
@@ -182,15 +409,29 @@ Sem framework e sem bundler, mas dividido em módulos ES nativos. `index.html` c
 | `src/client/constants.js` | todos os números ajustáveis do board |
 | `src/client/utils.js` | funções puras: sem DOM, sem estado |
 | `src/client/dom.js` | as referências aos elementos de `index.html` |
-| `src/client/state.js` | **todo** o estado mutável: telas, zoom/pan, modo, raiz observada |
-| `src/client/storage.js` | organização das telas no `localStorage` |
+| `src/client/state.js` | **todo** o estado mutável: telas, zoom/pan, modo, raiz observada, conversa |
+| `src/client/storage.js` | o que o board lembra entre sessões, no `localStorage` |
 | `src/client/view.js` | câmera: zoom, pan e layout dos cards |
 | `src/client/cards.js` | criação, recarga e medida de cada tela |
 | `src/client/sidebar.js` | árvore de telas por pasta |
 | `src/client/inspect.js` | modo ponteiro e captura de XPath |
 | `src/client/feedback.js` | toast e área de transferência |
-| `src/client/controls.js` | listeners de mouse, teclado e toolbar |
+| `src/client/controls.js` | listeners de mouse, teclado, toolbar e a largura da sidebar |
 | `src/client/sse.js` | eventos do servidor aplicados no board |
+| `src/client/tabs.js` | as abas da sidebar: qual painel está visível |
+| `src/client/chat.js` | o painel de conversa: compositor, histórico, log e as bolhas |
+| `src/client/chat-client.js` | o transporte da conversa: as rotas `/api/chat/` |
+
+Os três últimos entram no fim da ordem de dependência de propósito. `tabs.js` conhece só
+`dom.js` e `state.js` — trocar de aba não pode depender de haver conversa. `chat.js`
+conhece `constants`, `dom`, `state`, `storage` e `feedback`, e **não faz rede**.
+`chat-client.js` é o único que fala com o servidor, e é o único que importa `chat.js`: a
+seta aponta do transporte para o desenho, nunca ao contrário, e é isso que deixa o painel
+funcionar (desenhando) antes de haver chave configurada.
+
+O acordo entre os dois é o `ChatTransport` de `state.js`, com todos os campos opcionais:
+`chat.js` chama `chat.transport?.send?.(...)` e segue a vida se ninguém tiver se
+registrado.
 
 Duas regras seguram essa divisão:
 
@@ -198,13 +439,19 @@ Duas regras seguram essa divisão:
    guardar algo entre eventos guarda lá. `state.js` exporta objetos mutáveis (`view`,
    `ui`), então `import { view }` dá uma referência viva e ninguém precisa de setter. As
    exceções são estados de *um gesto em andamento* (o acumulado da roda, o ponteiro do
-   arrasto), que vivem no módulo do gesto e morrem com ele.
+   arrasto, a pilha de desfazer do compositor, o índice de navegação do histórico, o
+   `AbortController` do turno em andamento), que vivem no módulo do gesto e morrem com
+   ele.
 2. **As dependências apontam numa direção só**, de cima para baixo nesta lista. `view.js`
    não conhece `cards.js`, `sidebar.js` não conhece `view.js`. É o que impede ciclo de
    import — e é por isso que as constantes têm módulo próprio em vez de morar no arquivo
    que mais as usa.
 
-- **Sidebar** — árvore de telas agrupadas por pasta. Cada pasta é um cabeçalho colapsável
+- **Sidebar** — duas abas, **Telas** e **Conversa**, com um painel visível por vez
+  (`tabs.js`; a aba ativa é `ui.activeTab`). Ela virou o lugar das duas coisas que se faz
+  com o board — ver o que existe e pedir uma mudança — e o canvas continua inteiro para os
+  protótipos. Nenhum dos dois painéis sabe da existência do outro.
+- **Aba Telas** — árvore de telas agrupadas por pasta. Cada pasta é um cabeçalho colapsável
   (o estado de colapso vive num `Set` no cliente e persiste entre re-renders de add/remove);
   a folha mostra só o nome do arquivo, já que o caminho vem do cabeçalho. Clicar numa folha
   centraliza o board naquele card. O rodapé mostra a raiz observada e, embaixo, o estado da
@@ -223,6 +470,18 @@ Duas regras seguram essa divisão:
 - **Cliente SSE** — assina `/events` e aplica os eventos no DOM.
 - **Map de assets** — `tela → recursos carregados`, lido de cada iframe a cada `load`.
   Um evento `asset` recarrega apenas as telas cujo conjunto contém aquele arquivo.
+- **Aba Conversa** — o log das mensagens, o compositor e os seletores de modelo, esforço,
+  aprovação automática e modo de envio. Todo texto que vem do modelo ou dos arquivos do
+  usuário entra por `textContent`, nunca por `innerHTML`: é conteúdo de fora, e o board o
+  trata como tal. O log acompanha o fim só para quem já estava no fim — quem rolou para
+  cima para ler não tem a viewport arrastada.
+- **Compositor** — cresce com o conteúdo até `CHAT_INPUT_MAX_HEIGHT` e daí rola por
+  dentro; tem pilha de desfazer própria (`CHAT_UNDO_LIMIT`, agrupada por pausa de
+  `CHAT_UNDO_GROUP_MS`) porque o desfazer nativo do textarea brigaria com as trocas de
+  texto que o histórico faz; grava o rascunho com um debounce de
+  `CHAT_DRAFT_DEBOUNCE_MS`; e a seta pra cima percorre as mensagens já enviadas, mas só
+  quando o cursor está na ponta certa do texto, para não roubar a navegação de dentro do
+  campo.
 
 Cada `iframe` começa com 1280px (referência de desktop), mas nem largura nem altura ficam
 fixas: no `load` de cada iframe o conteúdo real é medido (possível porque tudo é mesma
@@ -266,6 +525,28 @@ distribuição (`assignColumns`, em `utils.js`) vir antes do posicionamento — 
 coluna só existe depois de se saber quem caiu nela. O layout é recalculado quando um card
 muda de largura ou altura, ou quando uma tela entra ou sai.
 
+#### A sidebar: largura e altura
+
+A sidebar é uma coluna flex, e cada aba é um item que ocupa a altura toda abaixo da barra
+de abas. Trocar de aba é só `hidden` no painel — mas `hidden` é regra da folha do agente, e
+os dois painéis têm `display: flex` no `board.css`, que a vence. Por isso cada painel
+precisa do seu par `[hidden] { display: none }`; sem ele os dois ficam desenhados, dividem
+a altura pelo flex e a conversa abre só até a metade da barra.
+
+A **largura** é arrastável por um puxador de 5px entre a sidebar e o board. Ele é um item
+flex de verdade, e não uma borda sobreposta ao painel: sobreposto, ele cobriria o conteúdo
+e roubaria o clique de qualquer botão colado na beirada. O gesto escreve a variável CSS
+`--sidebar-width` que o `#sidebar` já lia — o layout continua sendo do `board.css`, e o
+`controls.js` só escolhe o número. Como a sidebar começa na borda esquerda da janela, o X
+do ponteiro *é* a largura pedida, e não há origem de gesto a guardar.
+
+Duas larguras convivem, e a diferença importa: `ui.sidebarWidth` guarda a **escolhida** e o
+CSS recebe a **aplicada**. Numa janela estreita elas divergem, porque o board tem um piso
+de espaço (`SIDEBAR_MIN_CANVAS`) que vence até o mínimo da própria sidebar — ver o
+protótipo é o ponto da ferramenta. Se o valor guardado fosse o aplicado, encolher a janela
+encolheria a sidebar *de vez*: devolvida ao tamanho de antes, ela não voltaria. Por isso o
+`resize` da janela recalcula a aplicada sem gravar nada.
+
 #### Organização das telas
 
 Arrastar o **título** de um card move a tela pelo canvas. O título é a alça porque é a
@@ -287,12 +568,31 @@ posição nunca é gravada: a tela mantém no armazenamento o último lugar vál
 esteve, e é para lá que ela volta no próximo carregamento. Gravar posição inválida seria
 persistir um estado que o board não sabe desenhar direito.
 
-A organização vive no `localStorage`, não em arquivo: a ferramenta é somente leitura
-sobre a pasta observada, e gerar um arquivo de layout dentro da pasta dos protótipos
-sujaria o diretório de trabalho do usuário. A chave leva a **raiz observada** — o mesmo
-navegador abre boards de pastas diferentes, e a organização de uma não tem nada a ver com
-a da outra. Toda leitura e escrita tolera falha (modo privado, JSON estragado): o pior
-caso é o board voltar ao layout automático, nunca quebrar.
+A organização vive no `localStorage`, não em arquivo. O motivo não é mais "a ferramenta
+não escreve na pasta" — o agente da conversa escreve —, e continua valendo assim mesmo: um
+arquivo de layout dentro da pasta dos protótipos sujaria o diretório de trabalho do
+usuário com um metadado que ele não pediu, que não é um protótipo e que ele teria de
+lembrar de não commitar. O que o agente grava lá é o que foi pedido; o que a ferramenta
+grava sozinha fica de fora.
+
+A chave leva a **raiz observada** — o mesmo navegador abre boards de pastas diferentes, e
+a organização de uma não tem nada a ver com a da outra. Toda leitura e escrita tolera
+falha (modo privado, JSON estragado): o pior caso é o board voltar ao layout automático,
+nunca quebrar.
+
+O `storage.js` guarda hoje três famílias, e a divisão entre elas é o que a chave carrega:
+
+| O que | Chave | Por quê |
+| --- | --- | --- |
+| Posições e tamanhos das telas | por raiz observada | é a organização *daquela* pasta |
+| Rascunho do compositor | por raiz observada | conversa em andamento é sobre aquela pasta; o texto não enviado de uma não deve vazar para o board de outra |
+| Histórico de mensagens enviadas | por raiz observada | a seta pra cima só deve trazer o que foi pedido àquele board |
+| Snap-to-grid | por navegador | é jeito de trabalhar, não conteúdo de pasta |
+| Largura da sidebar | por navegador | o tamanho confortável do painel depende do monitor, não da pasta |
+| `model`, `effort`, `sendOnEnter` | por navegador | **cópia de exibição**: a verdade é a configuração do servidor, e `applyServerConfig` sobrescreve quando ela chega |
+
+`autoApprove` de propósito **não** está nessa lista: quem decide se uma escrita acontece é
+o lado que escreve, então ele mora só na configuração do servidor.
 
 Limite conhecido: uma tela fixa pode virar inválida sozinha, quando o conteúdo dela cresce
 e o card passa a invadir o vizinho. Ela fica vermelha, mas a posição já gravada continua
@@ -465,17 +765,34 @@ pinacoteca/
 └─ ARCHITECTURE.md
 ```
 
+Nada de novo nasceu fora dessas pastas: a conversa é dois arquivos em `src/server/` e
+três em `src/client/`. O único estado da ferramenta que vive fora do repositório e fora
+da pasta observada é `~/.config/pinacoteca/config.json`.
+
 O pacote publicado no npm chama-se `pinacoteca` e leva apenas `bin/`, `src/`, `README.md`
-e `LICENSE`. Única dependência de runtime: `chokidar`. `ws`, `eslint`, `typescript` e
-`@types/node` são dependências só de desenvolvimento.
+e `LICENSE` — o `files` do `package.json` não precisou mudar, porque o código novo é todo
+`src/`. São **duas** dependências de runtime: `chokidar` e
+`@anthropic-ai/claude-agent-sdk` (veja "Claude Agent SDK, não um loop de tools na mão").
+`ws`, `eslint`, `typescript` e `@types/node` continuam só de desenvolvimento.
 
 ## Testes
 
 `npm test` roda duas suítes, nesta ordem: `test/unit.mjs` e `test/e2e.mjs`.
 
-**Unitário** (`node:test`) cobre só função pura: leitura de argumentos, resolução de
-caminho seguro, política de arquivo proibido, árvore da sidebar, XPath. São decisões que
-cabem em entrada e saída, e testar cada uma custa milissegundos.
+**Unitário** (`node:test`) cobre função que decide algo sozinha: leitura de argumentos,
+resolução de caminho seguro, política de arquivo proibido, árvore da sidebar, XPath,
+validação da configuração (`mergeConfig`, `publicConfig`), e do lado do agente
+`escapingPath`, `buildDiff`, `translateMessage`, `agentEnv` e `hasCredential`. São
+decisões que cabem em entrada e saída, e testar cada uma custa milissegundos.
+
+O `storage.js` do cliente é a exceção que precisou de um arranjo: ele lê e escreve
+`localStorage`, que não existe no `node --test`. Em vez de extrair a decisão para um
+módulo novo — ela é curta demais para pagar um arquivo —, o teste **instala um
+`localStorage` de mentira**. São dois: um que guarda de verdade, para exercitar a
+validação das preferências, o descarte de histórico estragado e o teto do histórico; e um
+que **lança em toda operação**, porque o caminho tolerante a falha é justamente o que
+segura o modo privado do navegador, e um caminho de erro que nunca é percorrido não está
+testado.
 
 **Ponta a ponta** cobre o resto, que é quase todo o valor da ferramenta: comportamento
 que só existe com um navegador de verdade no meio — o iframe recarregar sozinho, o map de
@@ -497,6 +814,19 @@ Duas regras mantêm o e2e rápido e estável:
 asserções. Teste novo não precisa entender CDP: importa `check`/`checkEventually` e
 descreve a condição.
 
+Duas regras a mais entraram com a conversa, e as duas são para manter:
+
+- **Nenhum teste chama a API da Anthropic.** O turno inteiro é exercitado com um `fetch`
+  forjado na página: ele responde `/api/chat/message` com um corpo de stream escrito à
+  mão, e o resto das requisições segue para o servidor de verdade. É o que permite testar
+  o texto crescendo em streaming, o bloco de tool fechando em ok, o `done` destravando o
+  botão Parar e o stream cortado no meio virando erro — sem chave, sem rede e sem custo.
+  Suíte que gasta dinheiro é suíte que ninguém roda.
+- **O e2e não toca no `~/.config` do usuário.** Antes de o servidor subir, a suíte aponta
+  `XDG_CONFIG_HOME` para uma pasta temporária (removida na saída do processo) e o servidor
+  a herda. Assim ela pode gravar uma chave falsa pela própria interface — que é como se
+  exercita o `saveKey` — sem chegar perto da configuração real da máquina.
+
 ## Guardrails
 
 O projeto não tem build, mas tem três verificações. `npm run check` roda as três.
@@ -506,6 +836,10 @@ O projeto não tem build, mas tem três verificações. `npm run check` roda as 
 | `npm run lint` | `eslint .` — variável não usada, `var`, `==`, função que cresceu demais |
 | `npm run typecheck` | `tsc` sobre o JSDoc (`jsconfig.json`, `checkJs` + `strict`) |
 | `npm test` | unitário e ponta a ponta |
+
+O lint separa os globais do servidor dos do navegador, e o cliente não ganha global novo
+à toa: `chat-client.js` usa `globalThis.TextDecoder` e `globalThis.AbortController`
+justamente para não precisar declarar mais nada na lista do navegador.
 
 Todo arquivo `.js` começa com `// @ts-check` e descreve os parâmetros em JSDoc. Não há
 TypeScript no código e não há passo de build: o editor e o `tsc` leem os comentários. É o
@@ -530,10 +864,37 @@ O servidor escuta só em `127.0.0.1`. Como a ferramenta é apontada para pastas 
 (`.env`, `.git/`) e diretórios de build. Sem isso, rodar na raiz de um projeto exporia
 segredos a qualquer página aberta no mesmo navegador.
 
+Essa superfície mudou de natureza com a conversa: o servidor local agora tem rotas que
+**gastam dinheiro** e **escrevem arquivos**. O que segura isso:
+
+| Guarda | O que ele impede |
+| --- | --- |
+| Só `127.0.0.1` | ninguém de fora da máquina alcança as rotas de conversa |
+| `POST` só embaixo de `/api/chat/` | o resto do servidor continua somente leitura, e o roteador separa os dois na primeira linha |
+| `cwd` preso à raiz observada | o agente parte de dentro da pasta — é o que orienta o Bash e os caminhos relativos |
+| `escapingPath` | nega qualquer tool cujo caminho caia fora da raiz, **antes** da aprovação e **inclusive** com o automático ligado |
+| Aprovação por edição | nenhuma escrita acontece sem um clique, enquanto o automático estiver desligado |
+| Teto de corpo (`readJsonBody`) | um `POST` gigante não trava o processo |
+
+E o que **fica por conta do usuário**, dito sem rodeio:
+
+- **O gasto.** Cada mensagem é uma chamada paga com a chave dele. A ferramenta não tem
+  orçamento, cota nem aviso de custo; o que ela oferece é o botão Parar, que interrompe o
+  turno dos dois lados, e a interrupção automática quando a aba fecha.
+- **A aprovação automática.** Ligando o toggle, ele aceita que o agente escreva na pasta
+  observada sem perguntar. O cadeado da raiz continua valendo, o resto é escolha dele.
+- **A pasta que ele aponta.** `pinacoteca` na raiz de um projeto de verdade dá ao agente
+  a raiz daquele projeto para escrever. A pasta observada é a fronteira, então ela deve
+  ser a pasta dos protótipos.
+- **Qualquer outra página aberta no navegador.** As rotas não têm autenticação, como
+  antes: quem roda código na mesma máquina alcança `localhost`. Isso já valia para
+  `/preview/`; agora vale também para uma conversa.
+
 ## Como adicionar uma feature
 
-1. **Confira o escopo.** Se não ajuda a *ver* o HTML que já está no disco, pare aqui
-   (veja "Fora de escopo").
+1. **Confira o escopo.** Se não ajuda a *ver* o HTML que já está no disco, nem a chegar
+   nele por um pedido explícito do usuário na conversa, pare aqui (veja "Fora de
+   escopo").
 2. **Ache o módulo dono.** Use a tabela do cliente ou a do servidor. Se a mudança couber
    em um módulo existente, ela vai lá — arquivo novo só quando o existente passou a fazer
    duas coisas.
@@ -545,10 +906,17 @@ segredos a qualquer página aberta no mesmo navegador.
    | O que o board lembra entre sessões | `src/client/storage.js` |
    | O que um card mostra ou mede | `src/client/cards.js` |
    | Atalho de teclado, botão, gesto | `src/client/controls.js` |
+   | Largura da sidebar | `src/client/controls.js` |
    | Destaque de elemento, XPath | `src/client/inspect.js` |
    | Uma rota nova | `src/server/index.js` |
-   | Um tipo de evento novo | `src/server/watcher.js` **e** `src/client/sse.js` |
+   | Um tipo de evento novo do watcher | `src/server/watcher.js` **e** `src/client/sse.js` |
    | O que é ou não um protótipo | `src/server/screens.js` |
+   | O painel da conversa: bolha, bloco, atalho do compositor | `src/client/chat.js` |
+   | Falar com `/api/chat/`: requisição, stream, evento aplicado | `src/client/chat-client.js` |
+   | Um tipo de evento novo da conversa | `src/server/agent.js` **e** `src/client/chat-client.js` (e a tabela deste arquivo) |
+   | Uma aba nova na sidebar | `src/client/tabs.js` + `index.html` |
+   | Uma preferência ou credencial do agente | `src/server/config.js` |
+   | O que o agente pode fazer: tool, permissão, limite | `src/server/agent.js` |
 
 3. **Guarde estado em `state.js`**, não num `let` novo no meio do módulo. A exceção é
    estado de um gesto em andamento, que morre com o gesto.
@@ -561,6 +929,19 @@ segredos a qualquer página aberta no mesmo navegador.
 
 ## Fora de escopo
 
-Editar arquivos, criar arquivos, contas de usuário, deploy remoto. Se uma 
-funcionalidade não ajuda a *ver* o HTML que já está no disco, ela não pertence 
-a este projeto.
+**Ser um editor.** Não há campo de texto sobre o HTML, não há "salvar" no board, não há
+menu de arquivo. Quem escreve na pasta é o agente, a pedido, em uma conversa — e o board
+continua sendo só a janela para o resultado.
+
+**Escrever fora da raiz observada.** Isso não é uma funcionalidade que falta, é uma
+recusa: `escapingPath` nega, e essa negativa não tem toggle.
+
+**Outro provedor de modelo.** Só Anthropic. Um seletor de provedor multiplicaria formatos
+de credencial e de streaming por um ganho que este produto não persegue.
+
+**Contas de usuário, deploy remoto, servir para fora de `127.0.0.1`.** A ferramenta é de
+uma pessoa na máquina dela.
+
+A régua continua a mesma, agora com uma ponta a mais: se não ajuda a *ver* o HTML que
+está no disco, nem a *chegar* nele por um pedido explícito do usuário, não pertence a
+este projeto.

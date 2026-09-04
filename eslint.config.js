@@ -14,6 +14,7 @@ const NODE_GLOBALS = {
   clearTimeout: 'readonly',
   setInterval: 'readonly',
   clearInterval: 'readonly',
+  AbortController: 'readonly',
 };
 
 const BROWSER_GLOBALS = {

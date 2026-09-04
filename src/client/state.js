@@ -74,6 +74,8 @@ export const view = { scale: 1, x: 0, y: 0 };
  * - `lastChangedFiles`: as telas atingidas pelo *ultimo* evento do servidor. Sao
  *   varias quando o evento foi um asset compartilhado. Ficam com contorno verde
  *   ate o proximo evento chegar.
+ * - `activeTab`: qual painel da sidebar esta visivel — a arvore de telas ou a
+ *   conversa. Trocado por `tabs.js`.
  *
  * @type {{
  *   mode: 'pan' | 'pointer',
@@ -81,6 +83,8 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   openSizeMenuFile: string | null,
  *   snapToGrid: boolean,
  *   lastChangedFiles: string[],
+ *   activeTab: 'screens' | 'chat',
+ *   sidebarWidth: number,
  * }}
  */
 export const ui = {
@@ -89,4 +93,83 @@ export const ui = {
   openSizeMenuFile: null,
   snapToGrid: false,
   lastChangedFiles: [],
+  activeTab: 'screens',
+  // Largura em px ja validada. Zero ate `board.js` aplicar a largura salva.
+  sidebarWidth: 0,
+};
+
+/**
+ * Uma mensagem ja montada no log. `text` e a fonte da verdade do que esta
+ * escrito: a bolha do assistente cresce em streaming, e reescrever o
+ * `textContent` a partir daqui evita remontar o no a cada delta.
+ *
+ * @typedef {Object} ChatMessage
+ * @property {'user' | 'assistant'} role
+ * @property {string} text
+ * @property {HTMLElement} bubble o no correspondente dentro de `#chat-log`
+ */
+
+/**
+ * Como a conversa chega ao servidor. `chat.js` nao faz `fetch`: ele so chama
+ * estes callbacks, e quem os registra e o modulo de transporte.
+ *
+ * Todos sao opcionais porque o painel funciona sem nenhum — antes de haver
+ * chave configurada, enviar apenas desenha a mensagem do usuario no log.
+ *
+ * @typedef {Object} ChatTransport
+ * @property {(text: string) => void} [send] manda a mensagem e abre o stream
+ * @property {() => void} [stop] interrompe o turno em andamento
+ * @property {(requestId: string, allow: boolean) => void} [respondToPermission]
+ * @property {(apiKey: string) => void} [saveKey] grava a chave no servidor
+ * @property {(config: { model: string, effort: string, sendOnEnter: boolean,
+ *   autoApprove: boolean }) => void} [saveConfig]
+ */
+
+/**
+ * A conversa com o agente: o que ja foi dito, o que esta acontecendo agora e
+ * quem leva os gestos ao servidor.
+ *
+ * - `sessionId`: a sessao devolvida pelo servidor, mandada de volta em cada
+ *   mensagem seguinte para o agente continuar de onde parou.
+ * - `running`: um turno esta em andamento (o botao Parar no lugar do Enviar).
+ * - `autoApprove`: aprova as edicoes sem perguntar. E estado de conversa, e nao
+ *   preferencia do navegador: quem o guarda entre sessoes e a config do
+ *   servidor, junto da chave.
+ * - `hasKey`: o servidor ja tem uma chave gravada. Enquanto for falso, o painel
+ *   de configuracao fica a vista.
+ * - `messages`: as bolhas montadas, na ordem em que entraram no log.
+ * - `streaming`: a bolha de assistente que esta crescendo, ou `null` entre
+ *   turnos. `thinking` e o corpo do bloco de raciocinio do mesmo turno.
+ * - `tools` e `pending`: blocos ainda abertos, pelo id que o servidor mandou —
+ *   e por eles que o resultado e a resposta de permissao acham o no certo.
+ * - `draftTimer`: o debounce da gravacao do rascunho.
+ *
+ * @type {{
+ *   sessionId: string | null,
+ *   running: boolean,
+ *   autoApprove: boolean,
+ *   hasKey: boolean,
+ *   hasAmbientCredential: boolean,
+ *   messages: ChatMessage[],
+ *   streaming: ChatMessage | null,
+ *   thinking: HTMLElement | null,
+ *   tools: Map<string, HTMLElement>,
+ *   pending: Map<string, HTMLElement>,
+ *   transport: ChatTransport | null,
+ *   draftTimer: ReturnType<typeof setTimeout> | null,
+ * }}
+ */
+export const chat = {
+  sessionId: null,
+  running: false,
+  autoApprove: false,
+  hasKey: false,
+  hasAmbientCredential: false,
+  messages: [],
+  streaming: null,
+  thinking: null,
+  tools: new Map(),
+  pending: new Map(),
+  transport: null,
+  draftTimer: null,
 };

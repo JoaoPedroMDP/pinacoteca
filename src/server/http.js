@@ -140,3 +140,46 @@ export async function sendFile(req, res, filePath, { noStore = false } = {}) {
 
   send(req, res, 200, headers, content);
 }
+
+/**
+ * Le o corpo da requisicao e devolve o JSON. Recusa corpo maior que `limit`:
+ * numa rota local um corpo sem limite ainda e um jeito bobo de travar o
+ * processo.
+ *
+ * Lanca `Error` se estourar o limite ou se o JSON nao for valido — quem chama
+ * traduz isso em 400.
+ *
+ * @param {IncomingMessage} req
+ * @param {number} limit tamanho maximo do corpo, em bytes
+ * @returns {Promise<unknown>}
+ */
+export function readJsonBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    /** @type {Buffer[]} */
+    const chunks = [];
+    let size = 0;
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error('Corpo grande demais'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('error', reject);
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (raw.trim() === '') {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(new Error('JSON invalido'));
+      }
+    });
+  });
+}

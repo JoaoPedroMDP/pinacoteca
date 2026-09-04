@@ -7,9 +7,42 @@
 // descreve o comportamento observavel. Ao adicionar um comportamento novo no
 // board, adicione um `check` correspondente aqui.
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import {
   check, checkEventually, createFixture, findChrome, report, startBoard,
 } from './harness.mjs';
+
+// A configuracao da conversa (chave da API inclusa) mora em
+// `~/.config/pinacoteca`. O teste grava uma chave falsa nela, entao o XDG e
+// apontado para uma pasta temporaria antes de o servidor subir — ele herda o
+// ambiente deste processo. Rodar a suite nao pode sujar a config real da
+// maquina.
+const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pinacoteca-config-'));
+process.env.XDG_CONFIG_HOME = configHome;
+
+// O servidor tambem herda estas: se a maquina que roda o teste estiver logada
+// no Claude Code (ou tiver uma chave solta no ambiente), `hasAmbientCredential`
+// veria uma sessao que o teste nao gravou. Zera para o board nascer sem
+// credencial nenhuma, e cada teste que precisar de uma a declara na mao.
+for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_PROFILE']) {
+  delete process.env[name];
+}
+
+// `hasAmbientCredential` tambem olha o `.credentials.json` do `claude login`
+// (veja `agent.js`) — sem apontar para uma pasta vazia, uma maquina de
+// desenvolvedor logada de verdade vazaria essa sessao para os testes.
+process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pinacoteca-claude-config-'));
+
+process.on('exit', () => {
+  try {
+    fs.rmSync(configHome, { recursive: true, force: true });
+  } catch {
+    // Sobra em /tmp e o sistema limpa depois. Nao e motivo para falhar.
+  }
+});
 
 const PORT = 5230 + Math.floor(Math.random() * 200);
 const CDP_PORT = 9400 + Math.floor(Math.random() * 200);
@@ -608,6 +641,371 @@ for (const round of [2, 3, 4]) {
     return reloaded(before, now, ['responsivo.html']) && (await responsiveWidth()) === 600;
   });
 }
+
+/* ---------- Abas da sidebar ---------- */
+
+process.stdout.write('\nAbas da sidebar\n');
+
+check('comeca na aba Telas', await board.evaluate(
+  "!document.getElementById('tab-screens').hidden && document.getElementById('tab-chat').hidden"));
+
+await board.evaluate("document.querySelector('[data-tab=\"chat\"]').click()");
+await checkEventually('clicar em Conversa esconde a lista de telas e mostra o compositor', async () => (
+  await board.evaluate(
+    "document.getElementById('tab-screens').hidden && !document.getElementById('tab-chat').hidden "
+    + "&& getComputedStyle(document.getElementById('chat-composer')).display !== 'none'")));
+check('a aba Conversa fica marcada selecionada', await board.evaluate(
+  "document.querySelector('[data-tab=\"chat\"]').getAttribute('aria-selected') === 'true'"));
+
+// A lista de telas tem `display: flex` no CSS, que vence o `hidden` da folha do
+// agente. Sem o par `#tab-screens[hidden]` os dois paineis dividem a altura e a
+// conversa abre so ate a metade — por isso a medida, e nao so o `hidden`.
+check('a conversa ocupa a sidebar inteira abaixo das abas', await board.evaluate(`(() => {
+  const screensHeight = document.getElementById('tab-screens').getBoundingClientRect().height;
+  const chat = document.getElementById('tab-chat').getBoundingClientRect().height;
+  const tabs = document.getElementById('sidebar-tabs').getBoundingClientRect().height;
+  const sidebar = document.getElementById('sidebar').getBoundingClientRect().height;
+  return screensHeight === 0 && Math.abs(chat - (sidebar - tabs)) < 1;
+})()`));
+
+await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
+await checkEventually('voltar para Telas mostra a lista de novo e esconde a conversa', async () => (
+  await board.evaluate(
+    "!document.getElementById('tab-screens').hidden && document.getElementById('tab-chat').hidden")));
+
+/* ---------- Largura da sidebar ---------- */
+
+process.stdout.write('\nLargura da sidebar\n');
+
+/**
+ * Arrasta o puxador ate `x` px da borda esquerda da janela.
+ * @type {(x: number) => string}
+ */
+const dragResizer = (x) => `(() => {
+  const grip = document.getElementById('sidebar-resizer');
+  const box = grip.getBoundingClientRect();
+  const y = box.top + box.height / 2;
+  const at = (clientX) => ({
+    pointerId: 7, button: 0, bubbles: true, cancelable: true, clientX, clientY: y,
+  });
+
+  grip.dispatchEvent(new PointerEvent('pointerdown', at(box.left)));
+  grip.dispatchEvent(new PointerEvent('pointermove', at(${x})));
+  grip.dispatchEvent(new PointerEvent('pointerup', at(${x})));
+
+  return document.getElementById('sidebar').getBoundingClientRect().width;
+})()`;
+
+const widened = await board.evaluate(dragResizer(420));
+check('arrastar o puxador alarga a sidebar', widened === 420, `largura=${widened}`);
+
+check('a largura escolhida vai para o localStorage',
+  (await board.evaluate("localStorage.getItem('pinacoteca:sidebar-width')")) === '420');
+
+const clamped = await board.evaluate(dragResizer(40));
+check('o puxador nao encolhe a sidebar abaixo do minimo', clamped === 200, `largura=${clamped}`);
+
+// A restauracao na carga nao entra aqui: o harness nao recarrega a pagina, e
+// so o que se pode observar e a gravacao (checada acima) mais o clamp, que tem
+// teste de unidade proprio.
+await board.evaluate(dragResizer(420));
+
+/* ---------- Conversa ---------- */
+
+process.stdout.write('\nConversa\n');
+
+await board.evaluate("document.querySelector('[data-tab=\"chat\"]').click()");
+
+/**
+ * Digita caractere a caractere, como o compositor ve o usuario escrevendo: e o
+ * evento `input` que alimenta o auto-crescimento e a pilha de desfazer.
+ * @param {string} text
+ */
+const type = (text) => board.evaluate(`(() => {
+  const input = document.getElementById('chat-input');
+  input.focus();
+  for (const char of ${JSON.stringify(text)}) {
+    input.value += char;
+    input.selectionStart = input.selectionEnd = input.value.length;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+})()`);
+
+/**
+ * @param {string} key
+ * @param {Record<string, boolean>} [modifiers]
+ */
+const press = (key, modifiers = {}) => board.evaluate(`(() => {
+  const input = document.getElementById('chat-input');
+  input.focus();
+  input.dispatchEvent(new KeyboardEvent('keydown', Object.assign(
+    { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true },
+    ${JSON.stringify(modifiers)},
+  )));
+})()`);
+
+const clearComposer = () => board.evaluate(`(() => {
+  const input = document.getElementById('chat-input');
+  input.value = '';
+  input.selectionStart = input.selectionEnd = 0;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+
+const composerValue = () => board.evaluate("document.getElementById('chat-input').value");
+const composerHeight = () => board.evaluate("document.getElementById('chat-input').offsetHeight");
+const sentCount = () => board.evaluate("document.querySelectorAll('#chat-log .chat-msg.is-user').length");
+// O badge fica aceso (aria-pressed=true) no modo Shift+Enter, o inverso de "Enter envia".
+const sendsOnEnter = () => board.evaluate(
+  "document.getElementById('chat-send-mode').getAttribute('aria-pressed') === 'false'");
+const toggleSendMode = () => board.evaluate("document.getElementById('chat-send-mode').click()");
+
+// `initChat` mede o compositor com a aba escondida (`scrollHeight` da 0 sem
+// layout) — sem recalcular ao trocar de aba, o campo fica travado em 0px ate
+// o primeiro evento `input`, e parece cortado pela metade.
+const heightOnTabShow = await composerHeight();
+check('o compositor ja nasce com altura normal ao abrir a aba Conversa',
+  heightOnTabShow > 20, `altura=${heightOnTabShow}`);
+
+check('a conversa comeca vazia', !(await board.evaluate("document.getElementById('chat-empty').hidden")));
+
+if (!(await sendsOnEnter())) await toggleSendMode();
+
+await type('ola');
+await press('Enter', { shiftKey: true });
+check('com Enter enviando, Shift+Enter nao envia', (await sentCount()) === 0);
+
+await press('Enter');
+await checkEventually('Enter envia e a bolha do usuario aparece no log',
+  async () => (await sentCount()) === 1 && (await composerValue()) === '');
+check('o aviso de log vazio some na primeira mensagem',
+  await board.evaluate("document.getElementById('chat-empty').hidden"));
+
+await toggleSendMode();
+await checkEventually('alternar o badge de envio avisa por toast', async () => {
+  const toast = await board.evaluate(
+    "document.getElementById('toast')?.classList.contains('is-visible') && document.getElementById('toast').textContent");
+  return toast === 'Envio com Shift+Enter ativado';
+});
+await type('mundo');
+await press('Enter');
+check('com Enter desligado, Enter nao envia', (await sentCount()) === 1);
+check('e o texto continua no compositor', (await composerValue()) === 'mundo');
+
+await press('Enter', { shiftKey: true });
+await checkEventually('com Enter desligado, Shift+Enter envia',
+  async () => (await sentCount()) === 2 && (await composerValue()) === '');
+await toggleSendMode();
+
+await type('um dois');
+await press('z', { ctrlKey: true });
+check('Ctrl+Z devolve o texto anterior', (await composerValue()) === 'um');
+
+await clearComposer();
+await press('ArrowUp');
+check('seta pra cima traz a ultima mensagem enviada', (await composerValue()) === 'mundo');
+
+await clearComposer();
+const spaceNotPanned = await board.evaluate(`(() => {
+  const input = document.getElementById('chat-input');
+  input.focus();
+  return input.dispatchEvent(new KeyboardEvent('keydown', {
+    key: ' ', bubbles: true, cancelable: true,
+  }));
+})()`);
+check('espaco no compositor nao vira atalho de pan (evento nao cancelado)', spaceNotPanned === true);
+await type('um espaco');
+check('e digitar espaco no compositor funciona', (await composerValue()) === 'um espaco');
+
+await clearComposer();
+const oneLine = await composerHeight();
+await type('a\nb\nc\nd\ne');
+await checkEventually('o compositor cresce com varias linhas',
+  async () => (await composerHeight()) > oneLine);
+await clearComposer();
+
+// Os blocos do log so aparecem quando o transporte existe, e ele e da tarefa
+// seguinte. O modulo ja esta carregado pelo board, entao o `import` devolve a
+// mesma instancia e as funcoes desenham no `#chat-log` de verdade.
+await board.evaluate(`(async () => {
+  const chat = await import('/app/chat.js');
+  chat.appendAssistantDelta('res');
+  chat.appendAssistantDelta('posta');
+  chat.appendToolUse({ id: 't1', name: 'Edit', input: { file: 'login.html' } });
+  chat.updateToolResult({ id: 't1', ok: true, summary: 'gravado' });
+  chat.appendPermissionRequest({
+    requestId: 'p1', toolName: 'Write', input: { file: 'novo.html' },
+    diff: '@@ -1 +1 @@\\n-antigo\\n+novo',
+  });
+})()`);
+
+await checkEventually('a resposta do assistente cresce em streaming numa bolha so', async () => (
+  await board.evaluate(
+    "document.querySelectorAll('#chat-log .chat-msg.is-assistant').length === 1"
+    + " && document.querySelector('#chat-log .chat-msg.is-assistant').textContent === 'resposta'")));
+
+check('o bloco de ferramenta fecha em ok', await board.evaluate(
+  "document.querySelector('#chat-log .chat-tool.is-ok .chat-tool-status').textContent === 'gravado'"));
+
+check('o diff do pedido de permissao pinta adicao e remocao', await board.evaluate(
+  "document.querySelectorAll('#chat-log .chat-diff-line.is-add').length === 1"
+  + " && document.querySelectorAll('#chat-log .chat-diff-line.is-del').length === 1"));
+
+await board.evaluate("document.querySelector('#chat-log .chat-permission-reject').click()");
+await checkEventually('rejeitar fecha o pedido de permissao', async () => (
+  await board.evaluate(
+    "!!document.querySelector('#chat-log .chat-permission.is-rejected')"
+    + " && document.querySelector('#chat-log .chat-permission-approve').disabled")));
+
+/* ---------- Transporte da conversa ---------- */
+
+process.stdout.write('\nTransporte da conversa\n');
+
+const settingsVisible = () => board.evaluate("!document.getElementById('chat-settings').hidden");
+const stopVisible = () => board.evaluate("!document.getElementById('chat-stop').hidden");
+/** @type {(selector: string) => Promise<string>} */
+const lastOf = (selector) => board.evaluate(
+  `([...document.querySelectorAll(${JSON.stringify(selector)})].pop() || {}).textContent`);
+const lastAssistant = () => lastOf('#chat-log .chat-msg.is-assistant');
+const errorCount = () => board.evaluate("document.querySelectorAll('#chat-log .chat-error').length");
+const sessionId = () => board.evaluate("import('/app/state.js').then((m) => m.chat.sessionId)");
+
+check('sem chave gravada, o painel de configuracao fica a vista', await settingsVisible());
+check('sem chave nem sessao logada, a rota nao aponta credencial de ambiente',
+  (await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasAmbientCredential === false);
+check('sem credencial de ambiente, o aviso de sessao fica escondido',
+  await board.evaluate("document.getElementById('chat-credential-note').hidden"));
+
+// `setHasAmbientCredential` e a mesma funcao que `chat-client.js` chama com o
+// que a rota devolveu — aqui ela e exercitada direto, simulando a maquina que
+// tem uma sessao do Claude Code mas nenhuma chave gravada na pinacoteca.
+await board.evaluate(
+  "import('/app/chat.js').then((m) => m.setHasAmbientCredential(true))");
+check('sessao detectada acende o aviso mesmo sem chave', await board.evaluate(
+  "!document.getElementById('chat-credential-note').hidden "
+  + "&& document.getElementById('chat-credential-note').textContent.length > 0"));
+check('e o painel de chave continua a vista, para quem quiser trocar por credito de API',
+  await settingsVisible());
+
+await board.evaluate(
+  "import('/app/chat.js').then((m) => m.setHasAmbientCredential(false))");
+check('tirar a sessao apaga o aviso', await board.evaluate(
+  "document.getElementById('chat-credential-note').hidden"));
+
+// A chave falsa vai pela propria interface: e o caminho que o usuario percorre,
+// e e ele que exercita `saveKey`. Nenhuma chamada a API da Anthropic acontece —
+// so a gravacao no `XDG_CONFIG_HOME` temporario.
+await board.evaluate(`(() => {
+  const input = document.getElementById('chat-key-input');
+  input.value = 'sk-ant-teste-falsa';
+  document.getElementById('chat-key-save').click();
+})()`);
+
+await checkEventually('gravar a chave esconde o painel de configuracao',
+  async () => !(await settingsVisible()));
+check('o servidor passa a responder que tem chave',
+  (await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasKey === true);
+
+// O parser de SSE, sozinho: comentario ignorado, varias linhas `data:` do mesmo
+// evento juntadas e o bloco sem terminador guardado para o proximo pedaco.
+const parsed = JSON.parse(await board.evaluate(`(async () => {
+  const { parseSseChunk } = await import('/app/chat-client.js');
+  const first = parseSseChunk('', ': batimento\\ndata: {"a":1}\\n\\ndata: linha1\\ndata: linha2\\n\\ndata: {"b"');
+  const second = parseSseChunk(first.rest, ':2}\\n\\n');
+  return JSON.stringify({ first, second });
+})()`));
+
+check('o parser junta varias linhas data: do mesmo evento',
+  parsed.first.events.length === 2 && parsed.first.events[1] === 'linha1\nlinha2');
+check('o parser ignora comentario e guarda o evento cortado no fim do pedaco',
+  parsed.first.events[0] === '{"a":1}' && parsed.first.rest === 'data: {"b"');
+check('o evento cortado fecha no pedaco seguinte',
+  parsed.second.events.length === 1 && parsed.second.events[0] === '{"b":2}');
+
+/**
+ * Troca o `fetch` da pagina por um que responde `/api/chat/message` com um
+ * stream forjado. E o unico jeito de exercitar o turno inteiro sem chamar a API
+ * da Anthropic de verdade.
+ * @param {string[]} chunks pedacos crus do corpo, na ordem
+ */
+const fakeStream = (chunks) => board.evaluate(`(() => {
+  const real = window.__realFetch || window.fetch;
+  window.__realFetch = real;
+  window.fetch = (url, options) => {
+    if (String(url).includes('/api/chat/message')) {
+      const encoder = new TextEncoder();
+      const parts = ${JSON.stringify(chunks)};
+      const body = new ReadableStream({
+        start(controller) {
+          for (const part of parts) controller.enqueue(encoder.encode(part));
+          controller.close();
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    }
+    return real(url, options);
+  };
+})()`);
+
+const restoreFetch = () => board.evaluate(
+  '(() => { if (window.__realFetch) window.fetch = window.__realFetch; })()');
+
+await fakeStream([
+  'data: {"type":"session","sessionId":"sessao-1"}\n\n',
+  ': batimento\ndata: {"type":"text","delta":"res"}\n\n',
+  'data: {"type":"text","delta":"posta ',
+  'do agente"}\n\ndata: {"type":"tool","id":"t9","name":"Write","input":{"file_path":"novo.html"}}\n\n',
+  'data: {"type":"tool-result","id":"t9","ok":true,"summary":"criado"}\n\n',
+  'data: {"type":"done","stopReason":"end_turn"}\n\n',
+]);
+
+await type('faca algo');
+await press('Enter');
+
+await checkEventually('o stream monta a resposta do assistente',
+  async () => (await lastAssistant()) === 'resposta do agente');
+check('a sessao devolvida pelo servidor e guardada', (await sessionId()) === 'sessao-1');
+check('o bloco da ferramenta do stream fecha em ok',
+  (await lastOf('#chat-log .chat-tool.is-ok .chat-tool-status')) === 'criado');
+await checkEventually('o `done` destrava o botao Parar', async () => !(await stopVisible()));
+
+// Servidor caido no meio do turno: sem `done`, a interface tem de destravar
+// mesmo assim — botao Parar preso e a pior falha possivel aqui.
+const errorsBefore = await errorCount();
+await fakeStream(['data: {"type":"text","delta":"cortado"}\n\n']);
+await type('de novo');
+await press('Enter');
+
+await checkEventually('stream cortado sem `done` vira erro no log',
+  async () => (await errorCount()) === errorsBefore + 1);
+await checkEventually('e destrava o botao Parar do mesmo jeito',
+  async () => !(await stopVisible()));
+
+await restoreFetch();
+
+// A configuracao do servidor manda: ela vem do disco, e dois navegadores
+// abertos na mesma pinacoteca tem de ver a mesma escolha. O `localStorage`
+// daqui e so o que se mostra ate a resposta chegar.
+await board.evaluate(`(() => {
+  localStorage.setItem('pinacoteca:chat-prefs', JSON.stringify({
+    model: 'claude-opus-5', effort: 'max', sendOnEnter: true,
+  }));
+})()`);
+await fetch(`http://localhost:${PORT}/api/chat/config`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ model: 'claude-sonnet-5', effort: 'low', sendOnEnter: false }),
+});
+
+await board.evaluate("import('/app/chat-client.js').then((m) => m.connectChat())");
+await checkEventually('a config do servidor vence o localStorage nos seletores', async () => (
+  await board.evaluate(
+    "document.getElementById('chat-model').value === 'claude-sonnet-5'"
+    + " && document.getElementById('chat-effort').value === 'low'"
+    + " && document.getElementById('chat-send-mode').getAttribute('aria-pressed') === 'true'")));
+check('e o localStorage passa a mostrar o que o servidor disse', await board.evaluate(
+  "JSON.parse(localStorage.getItem('pinacoteca:chat-prefs')).effort === 'low'"));
+
+await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
 
 /* ---------- Servidor ---------- */
 

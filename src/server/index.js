@@ -11,9 +11,11 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { listScreens, isForbiddenPreviewPath } from './screens.js';
-import { resolveInside, sendFile, sendJson, sendText } from './http.js';
+import { readJsonBody, resolveInside, sendFile, sendJson, sendText } from './http.js';
 import { startWatcher } from './watcher.js';
 import { SseHub } from './sse.js';
+import { publicConfig, readConfig, writeConfig } from './config.js';
+import { hasAmbientCredential, interrupt, resolvePermission, runTurn } from './agent.js';
 
 /** @typedef {import('node:http').IncomingMessage} IncomingMessage */
 /** @typedef {import('node:http').ServerResponse} ServerResponse */
@@ -29,6 +31,13 @@ const HOST = '127.0.0.1';
 // Se a porta pedida estiver ocupada, tenta as seguintes. Morrer por porta
 // ocupada seria atrito a toa numa maquina de desenvolvimento.
 const PORT_ATTEMPTS = 10;
+
+// Teto do corpo das rotas de conversa. Local ou nao, corpo sem limite e um
+// jeito bobo de travar o processo.
+const BODY_LIMIT_BYTES = 1024 * 1024;
+
+// Prefixo das unicas rotas que aceitam POST.
+const CHAT_PREFIX = '/api/chat/';
 
 // Versao do pacote, lida uma vez, para o board mostrar no rodape.
 const VERSION = await fs.readFile(PKG_PATH, 'utf8').then((raw) => JSON.parse(raw).version).catch(() => '');
@@ -77,6 +86,138 @@ function listen(server, port, attemptsLeft = PORT_ATTEMPTS) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {Record<string, unknown>}
+ */
+function asObject(value) {
+  return (typeof value === 'object' && value !== null && !Array.isArray(value))
+    ? /** @type {Record<string, unknown>} */ (value)
+    : {};
+}
+
+/**
+ * Um turno da conversa, escrito como `text/event-stream` na propria resposta.
+ *
+ * O `SseHub` nao serve aqui: ele e broadcast para todos os boards abertos, e
+ * este stream pertence a uma requisicao so.
+ *
+ * @param {IncomingMessage} req
+ * @param {ServerResponse} res
+ * @param {string} rootDir
+ * @param {Record<string, unknown>} body
+ */
+async function streamTurn(req, res, rootDir, body) {
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  if (text === '') {
+    sendText(req, res, 400, 'Mensagem vazia');
+    return;
+  }
+  const sessionId = typeof body.sessionId === 'string' && body.sessionId !== '' ? body.sessionId : null;
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+
+  // A sessao so tem id depois do primeiro evento quando o cliente mandou null.
+  let current = sessionId;
+  // Aba fechada no meio do turno nao pode deixar o agente gastando sozinho.
+  req.on('close', () => {
+    if (current) interrupt(current);
+  });
+
+  await runTurn({
+    rootDir,
+    sessionId,
+    text,
+    onEvent(event) {
+      if (event.type === 'session') current = event.sessionId;
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    },
+  });
+  res.end();
+}
+
+/**
+ * As rotas de `/api/chat/`. Devolve false se `pathname` nao for uma delas —
+ * ai o roteador segue para o 404.
+ *
+ * @param {IncomingMessage} req
+ * @param {ServerResponse} res
+ * @param {string} pathname
+ * @param {string} rootDir
+ * @returns {Promise<boolean>}
+ */
+async function handleChat(req, res, pathname, rootDir) {
+  if (pathname === `${CHAT_PREFIX}config`) {
+    const config = req.method === 'POST'
+      ? await writeConfig(await readJsonBody(req, BODY_LIMIT_BYTES))
+      : await readConfig();
+    // Nao entra em `publicConfig`: e capacidade do processo do servidor, nao
+    // um campo gravado no config.json — por isso e composta aqui, na rota.
+    sendJson(req, res, 200, {
+      ...publicConfig(config),
+      hasAmbientCredential: hasAmbientCredential(process.env),
+    });
+    return true;
+  }
+
+  // O resto so existe em POST; um GET neles cai no 404.
+  if (req.method !== 'POST') return false;
+  const body = asObject(await readJsonBody(req, BODY_LIMIT_BYTES));
+  const sessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
+
+  if (pathname === `${CHAT_PREFIX}message`) {
+    await streamTurn(req, res, rootDir, body);
+    return true;
+  }
+
+  if (pathname === `${CHAT_PREFIX}interrupt`) {
+    interrupt(sessionId);
+    sendJson(req, res, 200, { ok: true });
+    return true;
+  }
+
+  if (pathname === `${CHAT_PREFIX}permission`) {
+    const requestId = typeof body.requestId === 'string' ? body.requestId : '';
+    resolvePermission(sessionId, requestId, body.allow === true);
+    sendJson(req, res, 200, { ok: true });
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Casca das rotas de conversa: e o unico ramo do servidor que aceita `POST`, e
+ * o unico que precisa traduzir corpo invalido em 400.
+ *
+ * @param {IncomingMessage} req
+ * @param {ServerResponse} res
+ * @param {string} pathname
+ * @param {string} rootDir
+ */
+async function routeChat(req, res, pathname, rootDir) {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST') {
+    sendText(req, res, 405, 'Metodo nao suportado');
+    return;
+  }
+
+  try {
+    if (await handleChat(req, res, pathname, rootDir)) return;
+  } catch (error) {
+    // Se o stream ja comecou nao ha status a mandar: so fecha a resposta.
+    if (res.headersSent) res.end();
+    else sendText(req, res, 400, error instanceof Error ? error.message : 'Requisicao invalida');
+    return;
+  }
+
+  sendText(req, res, 404, 'Nao encontrado');
+}
+
+/**
  * Monta o roteador. Cada rota decide sozinha o que responder e retorna.
  *
  * | Rota            | Resposta                                          |
@@ -86,6 +227,11 @@ function listen(server, port, attemptsLeft = PORT_ATTEMPTS) {
  * | `GET /api/screens` | telas encontradas, raiz observada e versao     |
  * | `GET /events`   | stream SSE de mudancas                            |
  * | `GET /preview/*`| o arquivo cru do prototipo e seus assets          |
+ * | `GET /api/chat/config` | a configuracao da conversa, sem a chave    |
+ * | `POST /api/chat/config` | grava a configuracao e devolve o mesmo    |
+ * | `POST /api/chat/message` | um turno, em `text/event-stream`         |
+ * | `POST /api/chat/interrupt` | aborta o turno em andamento            |
+ * | `POST /api/chat/permission` | responde uma permissao pendente       |
  *
  * @param {{ rootDir: string, hub: SseHub }} context
  * @returns {(req: IncomingMessage, res: ServerResponse) => Promise<void>}
@@ -93,6 +239,12 @@ function listen(server, port, attemptsLeft = PORT_ATTEMPTS) {
 export function createRequestHandler({ rootDir, hub }) {
   return async function handleRequest(req, res) {
     const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+
+    // `POST` existe so na conversa; o resto do servidor continua somente leitura.
+    if (pathname.startsWith(CHAT_PREFIX)) {
+      await routeChat(req, res, pathname, rootDir);
+      return;
+    }
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       sendText(req, res, 405, 'Metodo nao suportado');

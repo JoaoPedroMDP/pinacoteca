@@ -4,7 +4,7 @@
 // Todos os listeners do board estao aqui. Cada um comeca decidindo *de quem e o
 // gesto* — do prototipo, do modo ponteiro ou do board — e so entao age.
 
-import { toolbar, viewport } from './dom.js';
+import { sidebarResizer, toolbar, viewport } from './dom.js';
 import { screens, ui, view } from './state.js';
 import {
   applyTransform, finishResize, fitToScreen, moveScreen, panBy, persistPositions,
@@ -12,10 +12,11 @@ import {
 } from './view.js';
 import { closeSizeMenu, resetSizes, setInteractive } from './cards.js';
 import { adjustInspectLevel, clearHoverHighlight, hasHoverTarget } from './inspect.js';
-import { saveSnapToGrid } from './storage.js';
-import { resizeZoneAt } from './utils.js';
+import { saveSidebarWidth, saveSnapToGrid } from './storage.js';
+import { clamp, clampSidebarWidth, resizeZoneAt } from './utils.js';
 import {
   PAN_DRAG_THRESHOLD, RESIZE_CURSORS, RESIZE_EDGE_PX,
+  SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_CANVAS, SIDEBAR_MIN_WIDTH,
   WHEEL_STEP, WHEEL_ZOOM_DAMPING, ZOOM_STEP,
 } from './constants.js';
 
@@ -458,6 +459,17 @@ function handleHistoryShortcut(event) {
   return true;
 }
 
+/**
+ * O foco esta num campo que o usuario esta digitando? Espaco (e outros
+ * atalhos de uma letra so) tem que virar caractere ali, nao atalho do board.
+ * @param {EventTarget | null} target
+ * @returns {boolean}
+ */
+function isTypingTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+}
+
 window.addEventListener('keydown', (event) => {
   // Segurar Alt ativa o ponteiro enquanto a tecla estiver pressionada.
   if (event.key === 'Alt') {
@@ -467,8 +479,9 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
-  // Segurar espaco ativa o pan: da pra arrastar o board sem sair do ponteiro.
-  if (event.key === ' ') {
+  // Segurar espaco ativa o pan — mas so fora de um campo de texto, senao nunca
+  // daria pra digitar espaco no compositor da conversa (ou em qualquer input).
+  if (event.key === ' ' && !isTypingTarget(event.target)) {
     // Sempre: espaco rola a pagina e aciona o botao da toolbar que estiver com o
     // foco. Nos dois casos o gesto que o usuario quer e o pan.
     event.preventDefault();
@@ -540,3 +553,76 @@ export function bindFrameKeys(frameWindow) {
     // Iframe trocando de `src` no meio: a proxima carga registra de novo.
   }
 }
+
+
+/* ---------- Largura da sidebar ---------- */
+
+const SIDEBAR_LIMITS = {
+  min: SIDEBAR_MIN_WIDTH,
+  max: SIDEBAR_MAX_WIDTH,
+  minCanvas: SIDEBAR_MIN_CANVAS,
+};
+
+/**
+ * Aplica a largura da sidebar.
+ *
+ * Guarda em `ui.sidebarWidth` a largura *escolhida* e pinta a *aplicada*: numa
+ * janela estreita as duas divergem, porque o board tem piso de espaco. Guardar
+ * a aplicada faria a sidebar encolher de vez — ao devolver a janela ao tamanho
+ * de antes ela nao voltaria.
+ *
+ * O valor sai daqui pela variavel CSS que o `#sidebar` ja lia: o layout
+ * continua sendo do `board.css`, e este modulo so escolhe o numero.
+ *
+ * @param {number} width largura pedida, em px
+ * @returns {number} a largura que de fato valeu na janela atual
+ */
+export function setSidebarWidth(width) {
+  ui.sidebarWidth = Math.round(clamp(width, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH));
+
+  const applied = clampSidebarWidth(ui.sidebarWidth, window.innerWidth, SIDEBAR_LIMITS);
+  document.documentElement.style.setProperty('--sidebar-width', `${applied}px`);
+  return applied;
+}
+
+// Estado do arrasto do puxador: nasce no pointerdown e morre no pointerup.
+/** @type {number | null} */
+let sidebarPointerId = null;
+
+sidebarResizer.addEventListener('pointerdown', (event) => {
+  // So o botao principal arrasta; o direito abre o menu do navegador.
+  if (event.button !== 0) return;
+
+  sidebarPointerId = event.pointerId;
+  sidebarResizer.setPointerCapture(event.pointerId);
+  sidebarResizer.classList.add('is-dragging');
+  // Sem isto o arrasto seleciona o texto da sidebar junto.
+  event.preventDefault();
+});
+
+sidebarResizer.addEventListener('pointermove', (event) => {
+  if (event.pointerId !== sidebarPointerId) return;
+  // A sidebar comeca na borda esquerda da janela, entao o X do ponteiro *e* a
+  // largura pedida — nao ha origem do gesto a guardar.
+  setSidebarWidth(event.clientX);
+});
+
+/** @param {PointerEvent} event */
+function endSidebarDrag(event) {
+  if (event.pointerId !== sidebarPointerId) return;
+
+  sidebarPointerId = null;
+  sidebarResizer.classList.remove('is-dragging');
+  // So grava no fim: um `setItem` por pointermove seria escrita a toa.
+  saveSidebarWidth(ui.sidebarWidth);
+}
+
+sidebarResizer.addEventListener('pointerup', endSidebarDrag);
+sidebarResizer.addEventListener('pointercancel', endSidebarDrag);
+
+// Janela encolhida com a sidebar larga deixaria o board sem espaco: revalida a
+// largura contra a janela nova, sem gravar — o valor salvo continua sendo o que
+// o usuario escolheu, e volta quando a janela crescer de novo.
+window.addEventListener('resize', () => {
+  if (ui.sidebarWidth > 0) setSidebarWidth(ui.sidebarWidth);
+});

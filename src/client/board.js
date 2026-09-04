@@ -16,15 +16,22 @@
 //   feedback.js   toast e area de transferencia
 //   controls.js   listeners de mouse, teclado e toolbar
 //   sse.js        eventos do servidor
+//   tabs.js       abas da sidebar: Telas e Conversa
+//   chat.js       painel de conversa: compositor, historico e o log
+//   chat-client.js  transporte da conversa: as rotas /api/chat/
 
 import { rootPath, version } from './dom.js';
 import { source } from './state.js';
-import { loadSnapToGrid } from './storage.js';
+import { SIDEBAR_DEFAULT_WIDTH } from './constants.js';
+import { loadSidebarWidth, loadSnapToGrid } from './storage.js';
 import { createCard } from './cards.js';
 import { renderSidebar } from './sidebar.js';
 import { applyTransform, fitToScreen, layout } from './view.js';
 import { connectEvents } from './sse.js';
-import { setSnapToGrid } from './controls.js'; // tambem registra os listeners
+import { setSidebarWidth, setSnapToGrid } from './controls.js'; // tambem registra os listeners
+import { showTab } from './tabs.js'; // tambem registra o listener das abas
+import { initChat } from './chat.js';
+import { connectChat } from './chat-client.js';
 
 /**
  * @typedef {{ root: string, version: string, screens: string[] }} ScreensResponse
@@ -53,5 +60,15 @@ async function loadScreens() {
 
 applyTransform();
 setSnapToGrid(loadSnapToGrid());
+// Antes de qualquer medida: `fitToScreen` enquadra pela largura do viewport, e
+// o viewport e o que sobra depois da sidebar.
+setSidebarWidth(loadSidebarWidth() || SIDEBAR_DEFAULT_WIDTH);
+showTab('screens');
 await loadScreens();
+// Depois da carga de proposito: o rascunho e o historico da conversa sao por
+// raiz observada, e a raiz so e conhecida a partir de `/api/screens`.
+initChat();
+// Depois do `initChat`: `connectChat` pinta na interface o que o servidor sabe
+// (se ha chave, se a aprovacao e automatica), e o `initChat` sobrescreveria.
+await connectChat();
 connectEvents();

@@ -16,9 +16,17 @@ import path from 'node:path';
 import { parseArgs, DEFAULT_PORT } from '../src/cli.js';
 import { mimeTypeFor, resolveInside } from '../src/server/http.js';
 import { isForbiddenPreviewPath, isHtmlFile, isIgnoredDir, listScreens } from '../src/server/screens.js';
+import { DEFAULT_CONFIG, mergeConfig, publicConfig } from '../src/server/config.js';
+import {
+  agentEnv, buildDiff, escapingPath, hasAmbientCredential, hasCredential, translateMessage,
+} from '../src/server/agent.js';
+import { source } from '../src/client/state.js';
+import {
+  loadChatHistory, loadChatPrefs, pushChatHistory, loadChatDraft, saveChatDraft,
+} from '../src/client/storage.js';
 import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
-  previewUrl, rectsOverlap, resizeZoneAt, snapToGrid, sortNames,
+  clampSidebarWidth, previewUrl, rectsOverlap, resizeZoneAt, snapToGrid, sortNames,
 } from '../src/client/utils.js';
 
 /* ---------- cli.js ---------- */
@@ -138,6 +146,368 @@ test('listScreens varre recursivamente e pula o que nao e prototipo', async () =
   }
 });
 
+/* ---------- server/config.js ---------- */
+
+test('mergeConfig sem nada devolve os padroes', () => {
+  assert.deepEqual(mergeConfig(undefined, undefined), DEFAULT_CONFIG);
+  assert.deepEqual(mergeConfig('lixo', 42), DEFAULT_CONFIG);
+});
+
+test('mergeConfig mantem o campo que o patch nao cita', () => {
+  const current = { apiKey: 'sk-ant-x', model: 'claude-sonnet-5', effort: 'low', autoApprove: true, sendOnEnter: false };
+  assert.deepEqual(mergeConfig(current, { effort: 'max' }), { ...current, effort: 'max' });
+});
+
+test('mergeConfig troca modelo e esforco desconhecidos pelo padrao', () => {
+  const merged = mergeConfig({ model: 'gpt-9', effort: 'turbo' }, undefined);
+  assert.equal(merged.model, DEFAULT_CONFIG.model);
+  assert.equal(merged.effort, DEFAULT_CONFIG.effort);
+  // Patch invalido nao apaga uma escolha valida ja gravada.
+  assert.equal(mergeConfig({ model: 'claude-sonnet-5' }, { model: 'gpt-9' }).model, 'claude-sonnet-5');
+});
+
+test('mergeConfig ignora campo de tipo errado', () => {
+  const merged = mergeConfig({ autoApprove: 'sim', sendOnEnter: 0, apiKey: 12 }, undefined);
+  assert.equal(merged.autoApprove, DEFAULT_CONFIG.autoApprove);
+  assert.equal(merged.sendOnEnter, DEFAULT_CONFIG.sendOnEnter);
+  assert.equal(merged.apiKey, '');
+});
+
+test('mergeConfig apara a chave e aceita string vazia como apagar', () => {
+  assert.equal(mergeConfig(undefined, { apiKey: '  sk-ant-x  ' }).apiKey, 'sk-ant-x');
+  assert.equal(mergeConfig({ apiKey: 'sk-ant-x' }, { apiKey: '' }).apiKey, '');
+});
+
+test('publicConfig troca a chave por hasKey', () => {
+  const config = mergeConfig(undefined, { apiKey: 'sk-ant-x' });
+  const shown = publicConfig(config);
+  assert.equal(shown.hasKey, true);
+  assert.equal('apiKey' in shown, false);
+  assert.equal(publicConfig(mergeConfig(undefined, undefined)).hasKey, false);
+});
+
+/* ---------- server/agent.js ---------- */
+
+test('buildDiff mostra o conteudo novo de um Write', () => {
+  const diff = buildDiff('Write', { file_path: '/tmp/a.html', content: 'um\ndois' });
+  assert.equal(diff, '--- /tmp/a.html\n+um\n+dois');
+});
+
+test('buildDiff mostra os dois lados de um Edit', () => {
+  const diff = buildDiff('Edit', { file_path: '/tmp/a.html', old_string: 'velho', new_string: 'novo' });
+  assert.equal(diff, '--- /tmp/a.html\n-velho\n+novo');
+});
+
+test('buildDiff devolve vazio para tool que nao escreve', () => {
+  assert.equal(buildDiff('Read', { file_path: '/tmp/a.html' }), '');
+  assert.equal(buildDiff('Write', { file_path: '/tmp/a.html' }), '');
+});
+
+test('escapingPath deixa passar o que esta dentro da raiz', () => {
+  assert.equal(escapingPath('/tmp/proto', { file_path: '/tmp/proto/a.html' }), '');
+  assert.equal(escapingPath('/tmp/proto', { file_path: 'sub/a.html' }), '');
+  assert.equal(escapingPath('/tmp/proto', { command: 'ls' }), '');
+});
+
+test('escapingPath pega o caminho que sai da raiz', () => {
+  assert.equal(escapingPath('/tmp/proto', { file_path: '/etc/passwd' }), '/etc/passwd');
+  assert.equal(escapingPath('/tmp/proto', { file_path: '../fora.html' }), '/tmp/fora.html');
+  // Prefixo parecido nao e a mesma pasta.
+  assert.equal(escapingPath('/tmp/proto', { path: '/tmp/proto2/a.html' }), '/tmp/proto2/a.html');
+});
+
+test('translateMessage vira text e thinking a partir dos eventos parciais', () => {
+  /** @param {any} delta */
+  const event = (delta) => translateMessage(/** @type {any} */ ({
+    type: 'stream_event', event: { type: 'content_block_delta', delta },
+  }));
+  assert.deepEqual(event({ type: 'text_delta', text: 'oi' }), [{ type: 'text', delta: 'oi' }]);
+  assert.deepEqual(event({ type: 'thinking_delta', thinking: 'hm' }), [{ type: 'thinking', delta: 'hm' }]);
+  assert.deepEqual(event({ type: 'signature_delta', signature: 'x' }), []);
+});
+
+test('translateMessage pega so os tool_use da mensagem do assistente', () => {
+  const events = translateMessage(/** @type {any} */ ({
+    type: 'assistant',
+    message: { content: [
+      { type: 'text', text: 'ja mandei' },
+      { type: 'tool_use', id: 'tu_1', name: 'Edit', input: { file_path: '/a.html' } },
+    ] },
+  }));
+  assert.deepEqual(events, [{ type: 'tool', id: 'tu_1', name: 'Edit', input: { file_path: '/a.html' } }]);
+});
+
+test('translateMessage resume o tool_result e marca o erro', () => {
+  const events = translateMessage(/** @type {any} */ ({
+    type: 'user',
+    message: { content: [
+      { type: 'tool_result', tool_use_id: 'tu_1', content: [{ type: 'text', text: 'pronto' }] },
+      { type: 'tool_result', tool_use_id: 'tu_2', content: 'falhou', is_error: true },
+    ] },
+  }));
+  assert.deepEqual(events, [
+    { type: 'tool-result', id: 'tu_1', ok: true, summary: 'pronto' },
+    { type: 'tool-result', id: 'tu_2', ok: false, summary: 'falhou' },
+  ]);
+});
+
+test('translateMessage fecha o turno com done e avisa o resultado de erro', () => {
+  assert.deepEqual(
+    translateMessage(/** @type {any} */ ({ type: 'result', subtype: 'success', stop_reason: 'end_turn' })),
+    [{ type: 'done', stopReason: 'end_turn' }],
+  );
+  assert.deepEqual(
+    translateMessage(/** @type {any} */ ({
+      type: 'result', subtype: 'error_max_turns', stop_reason: null, errors: ['acabou'],
+    })),
+    [{ type: 'error', message: 'acabou' }, { type: 'done', stopReason: 'error_max_turns' }],
+  );
+});
+
+test('translateMessage ignora mensagem que nao interessa ao board', () => {
+  assert.deepEqual(translateMessage(/** @type {any} */ ({ type: 'system', subtype: 'init' })), []);
+});
+
+/* ---------- server/agent.js: ambiente ---------- */
+
+// `fileExists: () => false` em todo teste sem sessao de `claude login`: sem
+// isso o default (`existsSync` de verdade) leria o disco de quem roda o
+// teste, e a maquina do desenvolvedor poderia estar logada de verdade.
+const noCredentialFile = () => false;
+
+test('hasAmbientCredential pega qualquer credencial de ambiente aceita', () => {
+  assert.equal(hasAmbientCredential({}, noCredentialFile), false);
+  assert.equal(hasAmbientCredential({ ANTHROPIC_API_KEY: 'sk-ant-y' }, noCredentialFile), true);
+  assert.equal(hasAmbientCredential({ CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, noCredentialFile), true);
+  assert.equal(hasAmbientCredential({ ANTHROPIC_AUTH_TOKEN: 'tok' }, noCredentialFile), true);
+  assert.equal(hasAmbientCredential({ ANTHROPIC_PROFILE: 'work' }, noCredentialFile), true);
+  assert.equal(hasAmbientCredential({ CLAUDE_CODE_OAUTH_TOKEN: '' }, noCredentialFile), false);
+});
+
+test('hasAmbientCredential tambem aceita a sessao gravada por `claude login`', () => {
+  // Sem nenhuma variavel de ambiente — so o arquivo de credenciais, que e como
+  // o login de verdade fica guardado.
+  assert.equal(hasAmbientCredential({}, () => true), true);
+});
+
+test('hasCredential aceita a chave gravada antes de olhar o ambiente', () => {
+  assert.equal(hasCredential('sk-ant-x', {}, noCredentialFile), true);
+  assert.equal(hasCredential('', {}, noCredentialFile), false);
+});
+
+test('hasCredential aceita a credencial de ambiente quando nao ha chave gravada', () => {
+  assert.equal(hasCredential('', { CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, noCredentialFile), true);
+  assert.equal(hasCredential('', { ANTHROPIC_API_KEY: 'sk-ant-y' }, noCredentialFile), true);
+  // String vazia nao e credencial.
+  assert.equal(hasCredential('', { ANTHROPIC_API_KEY: '' }, noCredentialFile), false);
+  // Sessao de `claude login` (arquivo de credenciais) tambem basta.
+  assert.equal(hasCredential('', {}, () => true), true);
+});
+
+test('agentEnv com chave configurada tira as credenciais de ambiente', () => {
+  const before = { ...process.env };
+  try {
+    process.env.ANTHROPIC_AUTH_TOKEN = 'tok';
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth';
+    process.env.PATH_MARCADOR = 'preservado';
+
+    const env = agentEnv('sk-ant-x');
+    assert.equal(env.ANTHROPIC_API_KEY, 'sk-ant-x');
+    assert.equal('ANTHROPIC_AUTH_TOKEN' in env, false);
+    assert.equal('CLAUDE_CODE_OAUTH_TOKEN' in env, false);
+    // So as credenciais saem: o resto do ambiente e o do processo.
+    assert.equal(env.PATH_MARCADOR, 'preservado');
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, before);
+  }
+});
+
+test('agentEnv sem chave configurada passa o ambiente inteiro', () => {
+  const before = { ...process.env };
+  try {
+    process.env.ANTHROPIC_AUTH_TOKEN = 'tok';
+
+    const env = agentEnv('');
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'tok');
+    assert.equal('ANTHROPIC_API_KEY' in env, 'ANTHROPIC_API_KEY' in process.env);
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, before);
+  }
+});
+
+/* ---------- client/storage.js ----------
+
+   As funcoes daqui nao sao puras: leem e escrevem `localStorage`, que nao
+   existe no `node --test`. Em vez de extrair a decisao para outro modulo — ela
+   e curta demais para pagar um arquivo novo —, o teste instala um
+   `localStorage` de mentira. Sao dois: um que guarda de verdade, para a
+   validacao e o limite, e um que so lanca, para o caminho tolerante a falha,
+   que e o que segura o modo privado do navegador. */
+
+/**
+ * `localStorage` de mentira, em memoria.
+ * @returns {Storage}
+ */
+function memoryStorage() {
+  /** @type {Map<string, string>} */
+  const items = new Map();
+  return /** @type {Storage} */ ({
+    get length() {
+      return items.size;
+    },
+    clear: () => items.clear(),
+    key: (index) => [...items.keys()][index] ?? null,
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => void items.set(key, String(value)),
+    removeItem: (key) => void items.delete(key),
+  });
+}
+
+/**
+ * `localStorage` bloqueado: toda operacao lanca, como no modo privado com
+ * cookies desligados.
+ * @returns {Storage}
+ */
+function brokenStorage() {
+  const boom = () => {
+    throw new Error('bloqueado');
+  };
+  return /** @type {Storage} */ ({
+    get length() {
+      return boom();
+    },
+    clear: boom,
+    key: boom,
+    getItem: boom,
+    setItem: boom,
+    removeItem: boom,
+  });
+}
+
+/**
+ * Instala um `localStorage` e uma raiz observada para o teste seguinte.
+ * @param {Storage} storage
+ * @returns {Storage}
+ */
+function useStorage(storage) {
+  /** @type {any} */ (globalThis).localStorage = storage;
+  source.root = '/tmp/proto';
+  return storage;
+}
+
+test('loadChatPrefs devolve o padrao quando nao ha nada gravado', () => {
+  useStorage(memoryStorage());
+  const prefs = loadChatPrefs();
+  assert.equal(prefs.model, DEFAULT_CONFIG.model);
+  assert.equal(prefs.effort, DEFAULT_CONFIG.effort);
+  assert.equal(prefs.sendOnEnter, DEFAULT_CONFIG.sendOnEnter);
+});
+
+test('loadChatPrefs troca valor fora das listas pelo padrao', () => {
+  const storage = useStorage(memoryStorage());
+  storage.setItem('pinacoteca:chat-prefs', JSON.stringify({
+    model: 'gpt-9', effort: 'turbo', sendOnEnter: 'talvez',
+  }));
+
+  const prefs = loadChatPrefs();
+  assert.equal(prefs.model, DEFAULT_CONFIG.model);
+  assert.equal(prefs.effort, DEFAULT_CONFIG.effort);
+  assert.equal(prefs.sendOnEnter, DEFAULT_CONFIG.sendOnEnter);
+});
+
+test('loadChatPrefs aceita o que esta nas listas', () => {
+  const storage = useStorage(memoryStorage());
+  storage.setItem('pinacoteca:chat-prefs', JSON.stringify({
+    model: 'claude-haiku-4-5', effort: 'low', sendOnEnter: false,
+  }));
+
+  assert.deepEqual(loadChatPrefs(), {
+    model: 'claude-haiku-4-5', effort: 'low', sendOnEnter: false,
+  });
+});
+
+test('loadChatPrefs sobrevive a JSON estragado e a storage bloqueado', () => {
+  const storage = useStorage(memoryStorage());
+  storage.setItem('pinacoteca:chat-prefs', '{nao e json');
+  assert.equal(loadChatPrefs().model, DEFAULT_CONFIG.model);
+
+  useStorage(brokenStorage());
+  assert.equal(loadChatPrefs().model, DEFAULT_CONFIG.model);
+});
+
+test('loadChatHistory descarta entrada estragada', () => {
+  const storage = useStorage(memoryStorage());
+
+  storage.setItem('pinacoteca:chat-history:/tmp/proto', JSON.stringify(['ola', 3, null, 'mundo']));
+  assert.deepEqual(loadChatHistory(), ['ola', 'mundo']);
+
+  // Nao e lista: nao ha historico nenhum a aproveitar.
+  storage.setItem('pinacoteca:chat-history:/tmp/proto', JSON.stringify({ ola: 1 }));
+  assert.deepEqual(loadChatHistory(), []);
+
+  storage.setItem('pinacoteca:chat-history:/tmp/proto', 'nem json');
+  assert.deepEqual(loadChatHistory(), []);
+
+  useStorage(brokenStorage());
+  assert.deepEqual(loadChatHistory(), []);
+});
+
+test('pushChatHistory nao repete a mensagem anterior nem grava vazio', () => {
+  useStorage(memoryStorage());
+
+  pushChatHistory('ola');
+  pushChatHistory('ola');
+  pushChatHistory('');
+  assert.deepEqual(loadChatHistory(), ['ola']);
+
+  // Repeticao nao seguida entra: e mensagem nova na conversa.
+  pushChatHistory('mundo');
+  pushChatHistory('ola');
+  assert.deepEqual(loadChatHistory(), ['ola', 'mundo', 'ola']);
+});
+
+test('pushChatHistory para de crescer e mantem as mais recentes', () => {
+  useStorage(memoryStorage());
+
+  const sent = [];
+  for (let i = 0; i < 200; i += 1) {
+    const text = `mensagem ${i}`;
+    sent.push(text);
+    pushChatHistory(text);
+  }
+
+  const history = loadChatHistory();
+  assert.ok(history.length < sent.length, 'o historico tem de ter um teto');
+  // O que sobrou e o fim do que foi enviado, na ordem: as mais recentes.
+  assert.deepEqual(history, sent.slice(sent.length - history.length));
+});
+
+test('pushChatHistory com storage bloqueado nao derruba o compositor', () => {
+  useStorage(brokenStorage());
+  assert.doesNotThrow(() => pushChatHistory('ola'));
+});
+
+test('o rascunho e por raiz observada e a string vazia o apaga', () => {
+  const storage = useStorage(memoryStorage());
+
+  saveChatDraft('meio escrito');
+  assert.equal(loadChatDraft(), 'meio escrito');
+
+  source.root = '/tmp/outro';
+  assert.equal(loadChatDraft(), '');
+
+  source.root = '/tmp/proto';
+  saveChatDraft('');
+  assert.equal(loadChatDraft(), '');
+  assert.equal(storage.getItem('pinacoteca:chat-draft:/tmp/proto'), null);
+
+  useStorage(brokenStorage());
+  assert.doesNotThrow(() => saveChatDraft('x'));
+  assert.equal(loadChatDraft(), '');
+});
+
 /* ---------- client/utils.js ---------- */
 
 test('clamp prende o valor na faixa', () => {
@@ -179,6 +549,32 @@ test('buildTree agrupa por pasta e guarda o caminho de cada nivel', () => {
 });
 
 /* ---------- Colunas do layout ---------- */
+
+const SIDEBAR_LIMITS = { min: 200, max: 720, minCanvas: 320 };
+
+test('clampSidebarWidth respeita os limites fixos', () => {
+  assert.equal(clampSidebarWidth(400, 1600, SIDEBAR_LIMITS), 400);
+  assert.equal(clampSidebarWidth(50, 1600, SIDEBAR_LIMITS), 200);
+  assert.equal(clampSidebarWidth(5000, 1600, SIDEBAR_LIMITS), 720);
+});
+
+test('clampSidebarWidth guarda o espaco minimo do board', () => {
+  // Janela de 900: o teto vira 900 - 320 = 580, abaixo do maximo fixo.
+  assert.equal(clampSidebarWidth(720, 900, SIDEBAR_LIMITS), 580);
+  assert.equal(clampSidebarWidth(300, 900, SIDEBAR_LIMITS), 300);
+});
+
+test('clampSidebarWidth deixa o board vencer na janela estreita', () => {
+  // Janela de 400: nem o minimo da sidebar cabe junto do piso do board.
+  assert.equal(clampSidebarWidth(300, 400, SIDEBAR_LIMITS), 80);
+  // Janela menor que o proprio piso do board: a sidebar some em vez de negativa.
+  assert.equal(clampSidebarWidth(300, 200, SIDEBAR_LIMITS), 0);
+});
+
+test('clampSidebarWidth arredonda e recusa numero invalido', () => {
+  assert.equal(clampSidebarWidth(300.6, 1600, SIDEBAR_LIMITS), 301);
+  assert.equal(clampSidebarWidth(NaN, 1600, SIDEBAR_LIMITS), 200);
+});
 
 test('snapToGrid arredonda para a celula mais proxima', () => {
   assert.equal(snapToGrid(0, 20), 0);

@@ -13,6 +13,28 @@ export function clamp(value, min, max) {
 }
 
 /**
+ * Largura valida para a sidebar. Alem dos limites fixos, garante que o board
+ * fique com pelo menos `minCanvas` px: numa janela estreita esse piso e o que
+ * manda, e pode empurrar o resultado abaixo de `min`.
+ *
+ * @param {number} width largura pedida, em px
+ * @param {number} viewportWidth largura da janela, em px
+ * @param {{ min: number, max: number, minCanvas: number }} limits
+ * @returns {number} largura em px, ja arredondada
+ */
+export function clampSidebarWidth(width, viewportWidth, limits) {
+  if (!Number.isFinite(width)) return limits.min;
+
+  // O teto real e o menor entre o limite fixo e o que sobra para o board.
+  const ceiling = Math.min(limits.max, viewportWidth - limits.minCanvas);
+  // Janela estreita demais para os dois: o board ganha, e a sidebar encolhe
+  // abaixo do minimo em vez de empurrar o canvas para fora da tela.
+  if (ceiling < limits.min) return Math.max(0, Math.round(ceiling));
+
+  return Math.round(clamp(width, limits.min, ceiling));
+}
+
+/**
  * Arredonda uma coordenada para a grade mais proxima.
  * @param {number} value
  * @param {number} size tamanho da celula da grade, em px de canvas
