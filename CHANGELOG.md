@@ -1,3 +1,9 @@
+## 0.11.0 (2026-09-09)
+
+### Feat
+
+- Marcar seções das telas pra comentar com a IA
+
 ## 0.10.0 (2026-09-03)
 
 ### Feat
