@@ -476,30 +476,48 @@ export function setSessionId(sessionId) {
 }
 
 /**
+ * Recalcula a visibilidade do campo de chave e do botao Salvar a partir das
+ * tres fontes que decidem isso — nunca setadas direto nos setters, para as
+ * tres nao ficarem dessincronizadas entre si:
+ * - `hasKey`: com chave gravada, nao ha nada para decidir; campo some.
+ * - `hasAmbientCredential`: com sessao detectada e sem chave, o campo comeca
+ *   escondido — a conversa ja funciona sem ele.
+ * - `keyFieldRevealed`: o usuario pediu para ver o campo mesmo tendo sessao
+ *   (clicou no aviso), para trocar a sessao por credito de API.
+ */
+function updateKeyFieldVisibility() {
+  const visible = !chat.hasKey && (!chat.hasAmbientCredential || chat.keyFieldRevealed);
+  chatKeyInput.hidden = !visible;
+  chatKeySave.hidden = !visible;
+}
+
+/**
  * Ha chave gravada no servidor? Com chave, o painel de configuracao sai do
- * caminho da conversa — nao ha nada para o usuario decidir ali. Sem chave, o
- * painel fica a vista, e o aviso de credencial de ambiente (veja
- * `setHasAmbientCredential`) diz se colar uma e de fato necessario.
+ * caminho da conversa — nao ha nada para o usuario decidir ali.
  * @param {boolean} hasKey
  */
 export function setHasKey(hasKey) {
   chat.hasKey = hasKey;
   chatSettings.hidden = hasKey;
+  updateKeyFieldVisibility();
 }
 
 /**
  * Ha sessao do Claude Code no ambiente do servidor (`claude login`, plano
- * Pro/Max)? Quando ha, a conversa ja funciona sem chave nenhuma — o aviso so
- * existe para o usuario nao achar, vendo o campo de chave vazio, que precisa
- * pagar credito de API para conversar.
+ * Pro/Max)? Quando ha, a conversa ja funciona sem chave nenhuma: o campo de
+ * chave comeca escondido (veja `updateKeyFieldVisibility`) e o aviso, no
+ * lugar dele, diz que a sessao ja basta e serve de controle para revelar o
+ * campo (veja `revealKeyField` em `bindComposerEvents`).
  * @param {boolean} hasAmbientCredential
  */
 export function setHasAmbientCredential(hasAmbientCredential) {
   chat.hasAmbientCredential = hasAmbientCredential;
+  if (!hasAmbientCredential) chat.keyFieldRevealed = false;
   chatCredentialNote.hidden = !hasAmbientCredential;
   chatCredentialNote.textContent = hasAmbientCredential
     ? 'Sessao do Claude Code detectada — a conversa ja funciona com o seu plano, sem colar chave.'
     : '';
+  updateKeyFieldVisibility();
 }
 
 /**
@@ -860,6 +878,14 @@ function bindSettings() {
 
     saveKey(value);
     keyInput.value = '';
+  });
+
+  // So revela quando o campo esta de fato escondido por sessao (nao faz nada
+  // se ja esta visivel, ou se nao ha sessao — o clique nao muda o aviso em si).
+  chatCredentialNote.addEventListener('click', () => {
+    if (!chat.hasAmbientCredential || chat.hasKey) return;
+    chat.keyFieldRevealed = true;
+    updateKeyFieldVisibility();
   });
 }
 

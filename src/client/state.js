@@ -137,6 +137,9 @@ export const ui = {
  *   servidor, junto da chave.
  * - `hasKey`: o servidor ja tem uma chave gravada. Enquanto for falso, o painel
  *   de configuracao fica a vista.
+ * - `keyFieldRevealed`: com sessao de ambiente detectada, o campo de chave
+ *   nasce escondido; o usuario pode revela-lo clicando no aviso, e esse
+ *   clique e o que este campo guarda. Nao sobrevive a reload.
  * - `messages`: as bolhas montadas, na ordem em que entraram no log.
  * - `streaming`: a bolha de assistente que esta crescendo, ou `null` entre
  *   turnos. `thinking` e o corpo do bloco de raciocinio do mesmo turno.
@@ -150,6 +153,7 @@ export const ui = {
  *   autoApprove: boolean,
  *   hasKey: boolean,
  *   hasAmbientCredential: boolean,
+ *   keyFieldRevealed: boolean,
  *   messages: ChatMessage[],
  *   streaming: ChatMessage | null,
  *   thinking: HTMLElement | null,
@@ -165,6 +169,7 @@ export const chat = {
   autoApprove: false,
   hasKey: false,
   hasAmbientCredential: false,
+  keyFieldRevealed: false,
   messages: [],
   streaming: null,
   thinking: null,

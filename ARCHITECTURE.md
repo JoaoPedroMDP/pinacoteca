@@ -228,8 +228,17 @@ Essa mesma detecção (`hasAmbientCredential`) chega ao navegador: `GET`/`POST
 usuário com plano Pro/Max já logado no Claude Code veria o campo de chave vazio e assumiria
 que precisa colar uma — e, com ela, pagaria por crédito de API que a assinatura já cobre. O
 painel de configuração mostra um aviso (`chat.js`, `setHasAmbientCredential`) explicando que
-a sessão já basta, mas continua com o campo de chave à mão: colar uma ali é a forma de
-escolher crédito de API mesmo tendo sessão — por exemplo, para não gastar a cota do plano.
+a sessão já basta. Com sessão detectada, o campo de chave e o botão Salvar começam
+escondidos por padrão — nada para o usuário decidir ali, o aviso já resolve a dúvida —, mas
+não desaparecem de vez: o próprio aviso é um botão (`#chat-credential-note`) que, clicado,
+revela o campo. É a forma de escolher crédito de API mesmo tendo sessão — por exemplo, para
+não gastar a cota do plano —, só que atrás de uma ação extra em vez de sempre à vista. Essa
+regra de três fontes (`hasKey`, `hasAmbientCredential`, o clique guardado em
+`chat.keyFieldRevealed`) é recalculada por `updateKeyFieldVisibility`, chamada pelos dois
+setters e pelo clique — nunca setada direto em nenhum dos três, para não dessincronizar. O
+aviso também é visualmente secundário (fonte menor, mais opaco que o resto do painel) e
+mora abaixo do campo, não acima — a ordem antiga o deixava competindo com o campo pela
+primeira leitura.
 
 `hasAmbientCredential` não olha só variável de ambiente: o `claude login` de verdade não
 exporta nenhuma das de cima, ele grava a sessão em disco — mas onde depende da plataforma.

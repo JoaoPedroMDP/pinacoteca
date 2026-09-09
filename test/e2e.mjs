@@ -885,6 +885,9 @@ await checkEventually('rejeitar fecha o pedido de permissao', async () => (
 process.stdout.write('\nTransporte da conversa\n');
 
 const settingsVisible = () => board.evaluate("!document.getElementById('chat-settings').hidden");
+const keyFieldVisible = () => board.evaluate(
+  "!document.getElementById('chat-key-input').hidden "
+  + "&& !document.getElementById('chat-key-save').hidden");
 const stopVisible = () => board.evaluate("!document.getElementById('chat-stop').hidden");
 /** @type {(selector: string) => Promise<string>} */
 const lastOf = (selector) => board.evaluate(
@@ -898,6 +901,7 @@ check('sem chave nem sessao logada, a rota nao aponta credencial de ambiente',
   (await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasAmbientCredential === false);
 check('sem credencial de ambiente, o aviso de sessao fica escondido',
   await board.evaluate("document.getElementById('chat-credential-note').hidden"));
+check('sem chave e sem sessao, o campo de chave fica sempre a vista', await keyFieldVisible());
 
 // `setHasAmbientCredential` e a mesma funcao que `chat-client.js` chama com o
 // que a rota devolveu — aqui ela e exercitada direto, simulando a maquina que
@@ -907,13 +911,22 @@ await board.evaluate(
 check('sessao detectada acende o aviso mesmo sem chave', await board.evaluate(
   "!document.getElementById('chat-credential-note').hidden "
   + "&& document.getElementById('chat-credential-note').textContent.length > 0"));
-check('e o painel de chave continua a vista, para quem quiser trocar por credito de API',
-  await settingsVisible());
+check('e o campo de chave some por padrao, para nao competir com o aviso',
+  !(await keyFieldVisible()));
 
+// O aviso e o proprio controle: clicar nele revela o campo, para quem quiser
+// trocar a sessao por credito de API mesmo tendo uma sessao detectada.
+await board.evaluate("document.getElementById('chat-credential-note').click()");
+check('clicar no aviso revela o campo de chave', await keyFieldVisible());
+
+// Perder a sessao com o campo ja revelado nao pode escondê-lo de novo: sem
+// chave e sem sessao, ele volta a ser o unico caminho disponivel.
 await board.evaluate(
   "import('/app/chat.js').then((m) => m.setHasAmbientCredential(false))");
 check('tirar a sessao apaga o aviso', await board.evaluate(
   "document.getElementById('chat-credential-note').hidden"));
+check('e o campo de chave, ja revelado, continua a vista sem a sessao',
+  await keyFieldVisible());
 
 // A chave falsa vai pela propria interface: e o caminho que o usuario percorre,
 // e e ele que exercita `saveKey`. Nenhuma chamada a API da Anthropic acontece —
