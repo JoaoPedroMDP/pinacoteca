@@ -20,13 +20,14 @@ import { DEFAULT_CONFIG, mergeConfig, publicConfig } from '../src/server/config.
 import {
   agentEnv, buildDiff, escapingPath, hasAmbientCredential, hasCredential, translateMessage,
 } from '../src/server/agent.js';
-import { source } from '../src/client/state.js';
+import { commentQueue, source } from '../src/client/state.js';
 import {
   loadChatHistory, loadChatPrefs, pushChatHistory, loadChatDraft, saveChatDraft,
 } from '../src/client/storage.js';
 import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
-  clampSidebarWidth, previewUrl, rectsOverlap, resizeZoneAt, snapToGrid, sortNames,
+  clampSidebarWidth, previewUrl, rectsOverlap, resizeZoneAt, resolveXPath,
+  serializeCommentQueue, snapToGrid, sortNames,
 } from '../src/client/utils.js';
 
 /* ---------- cli.js ---------- */
@@ -692,4 +693,94 @@ test('computeXPath conta so os irmaos de mesma tag', () => {
 
 test('computeXPath para no <html>', () => {
   assert.equal(computeXPath(fakeTree().html), '/html[1]');
+});
+
+/* ---------- commentQueue ---------- */
+
+test('commentQueue cria, atualiza e remove um item pela chave (file, xpath)', () => {
+  commentQueue.clear();
+
+  let items = commentQueue.get('a.html');
+  assert.equal(items, undefined, 'comeca vazio');
+
+  items = new Map();
+  commentQueue.set('a.html', items);
+  items.set('//*[@id="x"]', { xpath: '//*[@id="x"]', text: 'primeiro', status: 'draft', anchorPoint: null });
+  assert.equal(commentQueue.get('a.html')?.get('//*[@id="x"]')?.text, 'primeiro');
+
+  // Reclicar o mesmo XPath atualiza o mesmo item, nao cria um segundo.
+  const existing = commentQueue.get('a.html')?.get('//*[@id="x"]');
+  if (existing) existing.text = 'editado';
+  assert.equal(commentQueue.get('a.html')?.size, 1);
+  assert.equal(commentQueue.get('a.html')?.get('//*[@id="x"]')?.text, 'editado');
+
+  // Outro arquivo com o mesmo XPath e um item independente.
+  const others = new Map();
+  commentQueue.set('b.html', others);
+  others.set('//*[@id="x"]', { xpath: '//*[@id="x"]', text: 'outro arquivo', status: 'draft', anchorPoint: null });
+  assert.equal(commentQueue.get('b.html')?.get('//*[@id="x"]')?.text, 'outro arquivo');
+  assert.equal(commentQueue.get('a.html')?.get('//*[@id="x"]')?.text, 'editado');
+
+  commentQueue.get('a.html')?.delete('//*[@id="x"]');
+  assert.equal(commentQueue.get('a.html')?.size, 0);
+
+  commentQueue.clear();
+});
+
+/* ---------- resolveXPath ---------- */
+
+// Documento falso: `resolveXPath` so chama `doc.evaluate` e le `singleNodeValue`.
+/** @param {unknown} value */
+const fakeDoc = (value) => /** @type {any} */ ({ evaluate: () => ({ singleNodeValue: value }) });
+
+test('resolveXPath devolve o elemento quando o XPath resolve', () => {
+  const el = { nodeType: 1 };
+  assert.equal(resolveXPath(fakeDoc(el), '//*[@id="x"]'), el);
+});
+
+test('resolveXPath devolve null quando o XPath nao resolve', () => {
+  assert.equal(resolveXPath(fakeDoc(null), '//*[@id="sumiu"]'), null);
+});
+
+test('resolveXPath devolve null quando doc.evaluate lanca', () => {
+  const doc = /** @type {any} */ ({ evaluate: () => { throw new Error('documento trocou de src'); } });
+  assert.equal(resolveXPath(doc, '//*[@id="x"]'), null);
+});
+
+/* ---------- serializeCommentQueue ---------- */
+
+/** @param {Array<[string, string, string, import('../src/client/state.js').CommentItem['status']]>} rows [file, xpath, text, status] */
+function queueOf(rows) {
+  /** @type {Map<string, Map<string, any>>} */
+  const queue = new Map();
+  for (const [file, xpath, text, status] of rows) {
+    if (!queue.has(file)) queue.set(file, new Map());
+    queue.get(file)?.set(xpath, { xpath, text, status, anchorPoint: null });
+  }
+  return queue;
+}
+
+test('serializeCommentQueue numera XPath e comentario por item', () => {
+  const queue = queueOf([
+    ['a.html', '/html[1]/body[1]/button[1]', 'ajusta a cor desse botao pra verde', 'confirmed'],
+    ['a.html', '//*[@id="card-principal"]', 'aumenta o espacamento em baixo', 'draft'],
+  ]);
+  assert.equal(
+    serializeCommentQueue(queue),
+    '1. XPath: /html[1]/body[1]/button[1]\n   Comentário: ajusta a cor desse botao pra verde'
+    + '\n\n2. XPath: //*[@id="card-principal"]\n   Comentário: aumenta o espacamento em baixo',
+  );
+});
+
+test('serializeCommentQueue descarta itens sem referencia', () => {
+  const queue = queueOf([
+    ['a.html', '//*[@id="sumiu"]', 'texto perdido', 'unreferenced'],
+    ['a.html', '//*[@id="fica"]', 'texto valido', 'confirmed'],
+  ]);
+  assert.equal(serializeCommentQueue(queue), '1. XPath: //*[@id="fica"]\n   Comentário: texto valido');
+});
+
+test('serializeCommentQueue devolve vazio sem item elegivel', () => {
+  assert.equal(serializeCommentQueue(new Map()), '');
+  assert.equal(serializeCommentQueue(queueOf([['a.html', '//*[@id="x"]', 'sumiu', 'unreferenced']])), '');
 });

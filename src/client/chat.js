@@ -16,13 +16,18 @@ import {
 } from './constants.js';
 import {
   chatAuto, chatComposer, chatCredentialNote, chatEffort, chatEmpty, chatInput, chatKeyInput,
-  chatKeySave, chatLog, chatModel, chatSend, chatSendMode, chatSettings, chatStop,
+  chatKeySave, chatLog, chatModel, chatQueue, chatQueueList, chatSend, chatSendMode,
+  chatSettings, chatStop,
 } from './dom.js';
-import { chat } from './state.js';
+import {
+  chat, commentQueue, notifyQueueChange, onQueueChange,
+} from './state.js';
+import { removeCommentItem } from './inspect.js';
 import {
   loadChatDraft, loadChatHistory, loadChatPrefs, pushChatHistory, saveChatDraft,
   saveChatPrefs,
 } from './storage.js';
+import { serializeCommentQueue } from './utils.js';
 import { showToast } from './feedback.js';
 
 /* ---------- Elementos ---------- */
@@ -457,6 +462,9 @@ export function setTurnRunning(running) {
   // Turno novo, bolha nova: o proximo delta nao cai no texto do turno anterior.
   chat.streaming = null;
   chat.thinking = null;
+
+  // Turno terminou: os baloes em carregamento ja cumpriram seu papel, somem.
+  if (!running) sweepSentQueue();
 }
 
 /**
@@ -581,14 +589,111 @@ export function applyServerConfig(config) {
   saveChatPrefs(prefs);
 }
 
+/* ---------- Fila de comentarios ---------- */
+//
+// Espelha `commentQueue` (state.js) numa lista "a enviar": cada linha e um
+// item da fila, incluindo rascunhos ainda abertos no board, com "x" removivel
+// que chama o mesmo removedor do balao (`inspect.js`). Nenhuma copia propria —
+// redesenha inteira a cada `onQueueChange`, como o board faz do lado dele.
+
+/**
+ * @param {string} file
+ * @param {import('./state.js').CommentItem} item
+ * @returns {HTMLElement}
+ */
+function buildQueueRow(file, item) {
+  const row = document.createElement('div');
+  row.className = 'chat-queue-item';
+  if (item.status === 'sending') row.classList.add('is-sending');
+  if (item.status === 'unreferenced') row.classList.add('is-unreferenced');
+
+  const text = document.createElement('span');
+  text.className = 'chat-queue-item-text';
+  text.textContent = `${file} — ${item.text || item.xpath}`;
+  row.append(text);
+
+  if (item.status !== 'sending') {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'chat-queue-item-remove';
+    remove.title = 'Remover';
+    remove.textContent = '×';
+    remove.addEventListener('click', () => removeCommentItem(file, item.xpath));
+    row.append(remove);
+  }
+
+  return row;
+}
+
+/** Redesenha a lista "a enviar" inteira a partir de `commentQueue`. */
+function renderQueueList() {
+  chatQueueList.replaceChildren();
+
+  let count = 0;
+  for (const [file, items] of commentQueue) {
+    for (const item of items.values()) {
+      count += 1;
+      chatQueueList.append(buildQueueRow(file, item));
+    }
+  }
+
+  chatQueue.hidden = count === 0;
+}
+
+onQueueChange(renderQueueList);
+
+/**
+ * Move todo item referenciado para `sending` (trava edicao/remocao ate o
+ * turno terminar) e descarta os itens `unreferenced` — quem ainda nao
+ * resolveu o no no momento do envio fica de fora da mensagem e sai da fila.
+ */
+function lockQueueForSending() {
+  let changed = false;
+
+  for (const [file, items] of commentQueue) {
+    for (const [xpath, item] of items) {
+      if (item.status === 'unreferenced') {
+        items.delete(xpath);
+      } else {
+        item.status = 'sending';
+      }
+      changed = true;
+    }
+    if (items.size === 0) commentQueue.delete(file);
+  }
+
+  if (changed) notifyQueueChange();
+}
+
+/** Remove da fila todo item `sending`: o turno que os carregava terminou. */
+function sweepSentQueue() {
+  let changed = false;
+
+  for (const [file, items] of commentQueue) {
+    for (const [xpath, item] of items) {
+      if (item.status !== 'sending') continue;
+      items.delete(xpath);
+      changed = true;
+    }
+    if (items.size === 0) commentQueue.delete(file);
+  }
+
+  if (changed) notifyQueueChange();
+}
+
 /* ---------- Envio ---------- */
 
 function submit() {
   const text = input.value.trim();
-  if (!text) return;
+  const queueMessage = serializeCommentQueue(commentQueue);
+  if (!text && !queueMessage) return;
 
-  appendUserMessage(text);
-  pushChatHistory(text);
+  // A fila vai primeiro, o texto livre do compositor depois — os dois se
+  // misturam num turno so, que e o comportamento desejado (uma mensagem).
+  const combined = queueMessage ? [queueMessage, text].filter(Boolean).join('\n\n') : text;
+
+  appendUserMessage(combined);
+  if (text) pushChatHistory(text);
 
   input.value = '';
   resetUndo();
@@ -602,8 +707,9 @@ function submit() {
     return;
   }
 
+  if (queueMessage) lockQueueForSending();
   setTurnRunning(true);
-  send(text);
+  send(combined);
 }
 
 function interrupt() {

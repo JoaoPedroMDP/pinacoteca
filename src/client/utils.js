@@ -195,6 +195,54 @@ export function computeXPath(el) {
 }
 
 /**
+ * Elemento apontado por um XPath calculado por `computeXPath`, dentro de um
+ * documento novo — o inverso dela. `null` quando o documento não tem mais
+ * nenhum nó naquele caminho (o alvo virou "etéreo", veja `state.js`).
+ *
+ * `9` é `XPathResult.FIRST_ORDERED_NODE_TYPE`: escrito como número em vez do
+ * nome global porque este arquivo é testado fora do navegador (`test/unit.mjs`
+ * passa um `doc` falso), e `XPathResult` não existe em Node.
+ *
+ * @param {Document} doc
+ * @param {string} xpath
+ * @returns {Element | null}
+ */
+export function resolveXPath(doc, xpath) {
+  try {
+    const result = doc.evaluate(xpath, doc, null, 9, null);
+    const node = result.singleNodeValue;
+    return node && node.nodeType === 1 ? /** @type {Element} */ (node) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Serializa os itens referenciados da fila de comentários numa única
+ * mensagem, numerada, com o XPath em linha própria (fácil de copiar/usar
+ * pelo agente) e o comentário em bloco abaixo (suporta multi-linha sem
+ * ambiguidade). Itens `unreferenced` ficam de fora: no momento do envio,
+ * quem ainda não resolveu o nó é descartado da mensagem.
+ *
+ * @param {Map<string, Map<string, import('./state.js').CommentItem>>} queue
+ * @returns {string} vazio quando não há item elegível
+ */
+export function serializeCommentQueue(queue) {
+  const lines = [];
+  let n = 0;
+
+  for (const items of queue.values()) {
+    for (const item of items.values()) {
+      if (item.status === 'unreferenced') continue;
+      n += 1;
+      lines.push(`${n}. XPath: ${item.xpath}\n   Comentário: ${item.text}`);
+    }
+  }
+
+  return lines.join('\n\n');
+}
+
+/**
  * @typedef {{ path: string, dirs: Map<string, TreeNode>, files: string[] }} TreeNode
  */
 

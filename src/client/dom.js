@@ -37,6 +37,8 @@ export const tabChat = required('tab-chat');
 
 export const chatLog = required('chat-log');
 export const chatEmpty = required('chat-empty');
+export const chatQueue = required('chat-queue');
+export const chatQueueList = required('chat-queue-list');
 export const chatSettings = required('chat-settings');
 export const chatCredentialNote = required('chat-credential-note');
 export const chatKeyInput = required('chat-key-input');

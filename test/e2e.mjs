@@ -184,6 +184,25 @@ const loginCardHas = (selector) => `[...document.querySelectorAll('.card')]
   .find((c) => c.querySelector('iframe').src.includes('login.html'))
   .querySelector('iframe').contentDocument.querySelector('${selector}') !== null`;
 
+/**
+ * Mesmo gesto de `gesture`, mas mirando o card de um arquivo qualquer — usado
+ * pela fila de comentarios, que precisa de mais de uma tela.
+ * @type {(file: string, type: string, extra?: string) => string}
+ */
+const gestureOn = (file, type, extra = '') => `(() => {
+  const card = [...document.querySelectorAll('.card')]
+    .find((c) => c.querySelector('iframe').src.includes(${JSON.stringify(file)}));
+  const shield = card.querySelector('.card-shield');
+  const rect = shield.getBoundingClientRect();
+  shield.dispatchEvent(new ${type}, {
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + 12,
+    bubbles: true,
+    ${extra}
+  }));
+  return true;
+})()`;
+
 process.stdout.write('\nModo ponteiro\n');
 
 await board.evaluate("document.querySelector('[data-action=\"toggle-mode\"]').click()");
@@ -209,12 +228,17 @@ await checkEventually('sair do modo ponteiro limpa o destaque',
 
 process.stdout.write('\nXPath e modo interativo\n');
 
-await board.evaluate(gesture("MouseEvent('click'", 'altKey: true,'));
-await checkEventually('Alt+clique avisa que copiou o XPath', async () => {
+await board.evaluate(gesture("MouseEvent('click'", 'ctrlKey: true, altKey: true,'));
+await checkEventually('Ctrl+Alt+clique avisa que copiou o XPath', async () => {
   const toast = await board.evaluate(
     "document.getElementById('toast')?.classList.contains('is-visible') && document.getElementById('toast').textContent");
   return typeof toast === 'string' && toast.startsWith('XPath copiado');
 });
+
+await board.evaluate("document.getElementById('toast').textContent = ''");
+await board.evaluate(gesture("MouseEvent('click'", 'altKey: true,'));
+check('Alt+clique sozinho nao copia o XPath (o gesto de abrir a caixinha e testado a parte)',
+  (await board.evaluate("document.getElementById('toast').textContent")) === '');
 
 await board.evaluate(gesture("MouseEvent('dblclick'"));
 await checkEventually('duplo clique libera o card para interagir',
@@ -1005,6 +1029,167 @@ await checkEventually('a config do servidor vence o localStorage nos seletores',
 check('e o localStorage passa a mostrar o que o servidor disse', await board.evaluate(
   "JSON.parse(localStorage.getItem('pinacoteca:chat-prefs')).effort === 'low'"));
 
+await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
+
+/* ---------- Fila de comentarios em modo ponteiro ---------- */
+
+process.stdout.write('\nFila de comentarios\n');
+
+const commentBoxTextarea = () => board.evaluate("document.querySelector('.pina-comment-box textarea')?.value ?? null");
+const balloonCount = () => board.evaluate("document.querySelectorAll('.pina-comment-balloon').length");
+const sendingBalloonCount = () => board.evaluate("document.querySelectorAll('.pina-comment-balloon.is-sending').length");
+const queueListText = () => board.evaluate("document.getElementById('chat-queue-list').textContent");
+const queueHidden = () => board.evaluate("document.getElementById('chat-queue').hidden");
+
+/** @param {string} text */
+const typeInBox = (text) => board.evaluate(`(() => {
+  const textarea = document.querySelector('.pina-comment-box textarea');
+  textarea.value = ${JSON.stringify(text)};
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+
+/** @param {Record<string, boolean>} [modifiers] */
+const pressInBox = (modifiers = {}) => board.evaluate(`(() => {
+  document.querySelector('.pina-comment-box textarea').dispatchEvent(new KeyboardEvent('keydown', Object.assign(
+    { key: 'Enter', bubbles: true, cancelable: true },
+    ${JSON.stringify(modifiers)},
+  )));
+})()`);
+
+await board.evaluate("document.querySelector('[data-action=\"toggle-mode\"]').click()"); // liga o ponteiro
+
+await board.evaluate(gestureOn('login.html', "PointerEvent('pointerdown'", 'button: 0,'));
+await checkEventually('clique simples em modo ponteiro abre a caixinha', async () => (await commentBoxTextarea()) === '');
+
+await typeInBox('linha 1');
+await checkEventually('a lista "a enviar" acompanha o rascunho ao vivo',
+  async () => (await queueListText()).includes('linha 1'));
+
+await pressInBox({ shiftKey: true });
+check('Shift+Enter nao confirma: a caixinha continua aberta', (await balloonCount()) === 0);
+
+await typeInBox('linha 1\nlinha 2 — ajusta a cor pra verde');
+await pressInBox();
+await checkEventually('Enter (sem Shift) confirma e mostra o balao', async () => (await balloonCount()) === 1);
+check('a caixinha fecha ao confirmar', (await commentBoxTextarea()) === null);
+
+await board.evaluate(gestureOn('login.html', "PointerEvent('pointerdown'", 'button: 0,'));
+await checkEventually('reclicar o no ja comentado reabre a caixinha com o texto salvo',
+  async () => (await commentBoxTextarea()) === 'linha 1\nlinha 2 — ajusta a cor pra verde');
+check('nao duplica item: so um balao/caixinha para aquele no',
+  (await board.evaluate("document.querySelectorAll('.pina-comment-balloon, .pina-comment-box').length")) === 1);
+
+await pressInBox();
+await checkEventually('confirmar de novo devolve ao balao', async () => (await balloonCount()) === 1);
+
+await board.evaluate("document.querySelector('.pina-comment-balloon .pina-comment-remove').click()");
+await checkEventually('remover pelo balao tira o item do board', async () => (await balloonCount()) === 0);
+await checkEventually('e da lista "a enviar" do chat', async () => await queueHidden());
+
+// Recria o item para testar a remocao pelo outro lado (lista do chat).
+await board.evaluate(gestureOn('login.html', "PointerEvent('pointerdown'", 'button: 0,'));
+await typeInBox('de novo');
+await pressInBox();
+await checkEventually('item recriado para o teste de remocao pelo chat', async () => (await balloonCount()) === 1);
+
+await board.evaluate("document.querySelector('.chat-queue-item-remove').click()");
+await checkEventually('remover pela lista do chat tira o balao do board', async () => (await balloonCount()) === 0);
+check('e a lista "a enviar" esconde', await queueHidden());
+
+// Alt sozinho (sem Ctrl): ativa o ponteiro e abre a caixinha, nao copia XPath.
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Alt' }))");
+await board.evaluate(gestureOn('dashboard.html', "PointerEvent('pointerdown'", 'button: 0, altKey: true,'));
+await checkEventually('Alt+clique sozinho abre a caixinha em vez de copiar o XPath',
+  async () => (await commentBoxTextarea()) === '');
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Alt' }))");
+await board.evaluate("document.querySelector('.pina-comment-box .pina-comment-remove').click()");
+
+/* ---------- Envio da fila e ciclo de carregamento ---------- */
+
+process.stdout.write('\nEnvio da fila e ciclo de carregamento\n');
+
+await board.evaluate("import('/app/chat.js').then((m) => { window.__sentTexts = []; m.setTransport({ send: (text) => window.__sentTexts.push(text) }); })");
+
+await board.evaluate(gestureOn('solo.html', "PointerEvent('pointerdown'", 'button: 0,'));
+await typeInBox('envia isso');
+await pressInBox();
+await checkEventually('item confirmado em solo.html, pronto para o envio', async () => (await balloonCount()) === 1);
+
+await board.evaluate("document.querySelector('[data-tab=\"chat\"]').click()");
+await board.evaluate("document.getElementById('chat-send').click()");
+
+await checkEventually('enviar serializa XPath e comentario numa unica mensagem', async () => {
+  const texts = await board.evaluate('window.__sentTexts');
+  return Array.isArray(texts) && texts.length === 1
+    && texts[0].startsWith('1. XPath:') && texts[0].includes('envia isso');
+});
+
+check('o balao entra em carregamento ao enviar', (await sendingBalloonCount()) === 1);
+check('a fila trava: balao em carregamento perde o "x"',
+  (await board.evaluate("document.querySelector('.pina-comment-balloon.is-sending .pina-comment-remove')")) === null);
+
+await board.evaluate("import('/app/chat.js').then((m) => m.setTurnRunning(false))");
+await checkEventually('turno terminado remove o balao em carregamento', async () => (await balloonCount()) === 0);
+check('e some da lista "a enviar"', await queueHidden());
+
+/* ---------- Reancoragem apos reload do prototipo ---------- */
+
+process.stdout.write('\nReancoragem apos reload do prototipo\n');
+
+await board.evaluate(gestureOn('dashboard.html', "PointerEvent('pointerdown'", 'button: 0,'));
+await typeInBox('ainda existe?');
+await pressInBox();
+await checkEventually('item confirmado em dashboard.html antes do reload', async () => (await balloonCount()) === 1);
+
+fixture.write('dashboard.html', '<!doctype html><meta charset=utf-8><link rel=stylesheet href="css/base.css"><p>Sem H1</p>');
+await checkEventually('XPath que sumiu vira item sem referencia na bandeja', async () => (
+  await board.evaluate("document.getElementById('pina-unreferenced-tray')?.hidden === false")));
+check('o balao some do card quando o item fica sem referencia', (await balloonCount()) === 0);
+
+fixture.write('dashboard.html', '<!doctype html><meta charset=utf-8><link rel=stylesheet href="css/base.css"><h1>Dash</h1>');
+await checkEventually('XPath que volta reancora sozinho e o balao reaparece',
+  async () => (await balloonCount()) === 1);
+check('a bandeja de sem referencia esvazia', await board.evaluate("document.getElementById('pina-unreferenced-tray').hidden"));
+
+await board.evaluate("document.querySelector('.pina-comment-balloon .pina-comment-remove').click()");
+
+// Sem referencia de novo, agora para testar o arrasto manual da bandeja ate
+// outro no (inclusive noutra tela) reancorando o item.
+await board.evaluate(gestureOn('dashboard.html', "PointerEvent('pointerdown'", 'button: 0,'));
+await typeInBox('reancora na mao');
+await pressInBox();
+await checkEventually('item confirmado de novo, para o teste de arrasto', async () => (await balloonCount()) === 1);
+
+fixture.write('dashboard.html', '<!doctype html><meta charset=utf-8><link rel=stylesheet href="css/base.css"><p>Sem H1</p>');
+await checkEventually('fica sem referencia, pronto para o arrasto', async () => (
+  await board.evaluate("document.getElementById('pina-unreferenced-tray')?.hidden === false")));
+
+/** @param {string} file */
+const dragUnreferencedTo = (file) => board.evaluate(`(() => {
+  const entry = document.querySelector('.pina-tray-entry');
+  const card = [...document.querySelectorAll('.card')]
+    .find((c) => c.querySelector('iframe').src.includes(${JSON.stringify(file)}));
+  const shield = card.querySelector('.card-shield');
+  const rect = shield.getBoundingClientRect();
+  const clientX = rect.left + rect.width / 2;
+  const clientY = rect.top + 12;
+  entry.dispatchEvent(new PointerEvent('pointerdown', {
+    pointerId: 11, button: 0, bubbles: true, cancelable: true, clientX, clientY,
+  }));
+  window.dispatchEvent(new PointerEvent('pointerup', {
+    pointerId: 11, bubbles: true, cancelable: true, clientX, clientY,
+  }));
+})()`);
+
+await dragUnreferencedTo('solo.html');
+await checkEventually('arrastar o item sem referencia ate um no valido reancora',
+  async () => (await balloonCount()) === 1);
+check('a bandeja de sem referencia esvazia depois do arrasto',
+  await board.evaluate("document.getElementById('pina-unreferenced-tray').hidden"));
+
+await board.evaluate("document.querySelector('.pina-comment-balloon .pina-comment-remove').click()");
+await board.evaluate("document.querySelector('[data-action=\"toggle-mode\"]').click()"); // desliga o ponteiro
+await board.evaluate("import('/app/chat.js').then((m) => m.setTransport(null))");
 await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
 
 /* ---------- Servidor ---------- */

@@ -326,6 +326,64 @@ body {
   color: var(--text-muted);
 }
 
+/* Lista "a enviar": espelho da fila de comentarios do board (veja inspect.js),
+   incluindo rascunhos ainda abertos como caixinha. */
+.chat-queue {
+  flex: 0 0 auto;
+  max-height: 30%;
+  overflow-y: auto;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-queue-title {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chat-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.chat-queue-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-queue-item.is-sending {
+  color: var(--text-muted);
+}
+
+.chat-queue-item.is-unreferenced .chat-queue-item-text {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.chat-queue-item-remove {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-queue-item-remove:hover {
+  color: var(--danger);
+}
+
 #chat-composer {
   display: flex;
   flex: 0 0 auto;
@@ -952,6 +1010,164 @@ body {
 
 .inspect-tip.is-visible {
   opacity: 1;
+}
+
+/* ---------- Fila de comentarios (modo ponteiro) ---------- */
+
+/* Filha do `.card` (nao do `.card-frame`, que corta com overflow: hidden):
+   herda o transform do canvas de graca, entao balao e caixinha ficam
+   ancorados sob pan/zoom sem recalculo, e podem crescer para fora da tela sem
+   serem cortados. `top: 36px` compensa o titulo acima do frame — 36px =
+   CARD_TITLE_HEIGHT em constants.js, mudou la muda aqui — para o layer ficar
+   alinhado ao topo do frame, que e o espaco em que `anchorPoint` e medido.
+   Vazia por padrao (pointer-events: none) para nao roubar hover/pan do board
+   fora dos elementos que ela de fato desenha. */
+.pina-queue-layer {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.pina-comment-balloon,
+.pina-comment-box {
+  position: absolute;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 220px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: rgb(20 22 26 / 96%);
+  color: var(--text);
+  font-size: 12px;
+  pointer-events: auto;
+  cursor: pointer;
+  /*
+   * Filha do `.pina-queue-layer`, que herda o transform do canvas: sem isto o
+   * balao/caixinha encolheria (ou cresceria) junto do zoom, igual ia acontecer
+   * com `.card-title` sem a mesma correcao (veja o comentario la). Aqui nao ha
+   * `width: 100%` para desfazer — a largura ja e fixa em px —, entao so a
+   * contra-escala basta. Ancorada no canto superior esquerdo porque e esse
+   * canto que `anchorFor` mede.
+   */
+  transform: scale(var(--inv-scale, 1));
+  transform-origin: 0 0;
+}
+
+.pina-comment-box {
+  flex-direction: column;
+  width: 220px;
+  cursor: default;
+}
+
+.pina-comment-summary {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pina-comment-balloon.is-sending {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.pina-comment-input {
+  width: 100%;
+  min-height: 60px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.pina-comment-remove {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pina-comment-remove:hover {
+  color: var(--danger);
+}
+
+.pina-comment-spinner {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-top: 2px;
+  border: 2px solid var(--text-muted);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: pina-spin 700ms linear infinite;
+}
+
+@keyframes pina-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Bandeja de itens sem referencia: canto do board, acima da toolbar. Some
+   por completo (nao so o conteudo) quando nao ha nenhum item — sem isto o
+   `hidden` de `renderUnreferencedTray` nao bastaria: `display: flex` abaixo
+   e regra de autor, que vence o `[hidden] { display: none }` do agente de
+   usuario mesmo sem disputa de especificidade. */
+.pina-unreferenced-tray {
+  position: absolute;
+  right: 16px;
+  bottom: 60px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 260px;
+  padding: 6px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: rgb(27 30 36 / 96%);
+  backdrop-filter: blur(6px);
+}
+
+.pina-unreferenced-tray[hidden] {
+  display: none;
+}
+
+.pina-tray-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: grab;
+}
+
+.pina-tray-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pina-comment-spinner {
+    animation: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

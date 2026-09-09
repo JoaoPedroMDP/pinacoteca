@@ -173,3 +173,43 @@ export const chat = {
   transport: null,
   draftTimer: null,
 };
+
+/**
+ * Um comentário endereçado ao agente de IA, apontando para um nó do protótipo.
+ *
+ * @typedef {Object} CommentItem
+ * @property {string} xpath XPath do nó no documento do iframe — chave dentro
+ *   do arquivo, calculado por `computeXPath`/`resolveXPath` em `utils.js`.
+ * @property {string} text o comentário, editado ao vivo na caixinha
+ * @property {'draft' | 'confirmed' | 'sending' | 'unreferenced'} status
+ * @property {{x: number, y: number} | null} anchorPoint última posição
+ *   conhecida do nó, em coordenadas internas do iframe (`getBoundingClientRect`
+ *   de dentro dele) — o balão/caixinha usa isso para se desenhar sem esperar o
+ *   próximo hover, e continua correto sob pan/zoom porque a camada em que
+ *   `anchorPoint` é desenhado já carrega o `transform` do canvas.
+ */
+
+/**
+ * Fila local de comentários endereçados à IA, por tela e por XPath do nó —
+ * chave dupla porque XPath só é único dentro do mesmo documento. Board
+ * (`inspect.js`) e chat (`chat.js`) leem daqui direto e se inscrevem em
+ * `onQueueChange` para redesenhar; nenhum dos dois guarda cópia própria.
+ * @type {Map<string, Map<string, CommentItem>>}
+ */
+export const commentQueue = new Map();
+
+/** @type {Array<() => void>} */
+const queueListeners = [];
+
+/**
+ * Inscreve uma função para redesenhar sempre que `commentQueue` mudar.
+ * @param {() => void} listener
+ */
+export function onQueueChange(listener) {
+  queueListeners.push(listener);
+}
+
+/** Avisa quem se inscreveu em `onQueueChange` que a fila mudou. */
+export function notifyQueueChange() {
+  for (const listener of queueListeners) listener();
+}

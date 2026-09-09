@@ -13,3 +13,4 @@
 8. Lembre o usuário de commitar depois que uma tarefa for concluída.
 9. Quando for gerar mensagens de commit, não ultrapasse 50 palavras. 
    Não precisamos explicar as alterações na mensagem.
+10. Não escreva no CHANGELOG

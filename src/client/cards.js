@@ -10,7 +10,9 @@ import { screens, ui } from './state.js';
 import { clamp, previewUrl, resizeZoneAt } from './utils.js';
 import { applyPresetSize, centerOn, layout, persistPositions } from './view.js';
 import { setCurrent } from './sidebar.js';
-import { clearHoverHighlight, copyXPathAt, injectInspectStyle, onInspectMove } from './inspect.js';
+import {
+  clearHoverHighlight, copyXPathAt, injectInspectStyle, onInspectMove, tryReanchor,
+} from './inspect.js';
 // Ciclo com `controls.js` (ele importa `setInteractive` daqui). E seguro: nenhum
 // dos dois chama o outro durante a avaliacao do modulo, so dentro de listener.
 import { bindFrameKeys } from './controls.js';
@@ -236,8 +238,9 @@ export function createCard(file) {
   shield.className = 'card-shield';
   shield.addEventListener('dblclick', () => setInteractive(file));
   shield.addEventListener('click', (event) => {
-    // Alt+clique captura o elemento sob o cursor e copia o XPath dele.
-    if (event.altKey) copyXPathAt(file, event);
+    // Ctrl+Alt+clique captura o elemento sob o cursor e copia o XPath dele.
+    // Alt sozinho ja abriu a caixinha de comentario no pointerdown (controls.js).
+    if (event.ctrlKey && event.altKey) copyXPathAt(file, event);
   });
   shield.addEventListener('pointermove', (event) => {
     // Perto de uma borda que agarra, o cursor ja avisa que dali sai um
@@ -296,6 +299,8 @@ export function createCard(file) {
     // Documento novo, `contentWindow` nova: o teclado precisa ser religado, senao
     // o Alt para de segurar o ponteiro assim que o foco entra na tela.
     bindFrameKeys(iframe.contentWindow);
+    // Reancora (ou marca sem referencia) cada item da fila de comentarios deste arquivo.
+    tryReanchor(file, iframe.contentDocument);
 
     // Segunda passada: o `load` do iframe nao e o fim da historia. Fonte web,
     // imagem tardia e conteudo montado por JS chegam depois dele, e a medida

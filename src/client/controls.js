@@ -11,7 +11,9 @@ import {
   recordMove, redo, resetPositions, resetZoom, resizeScreen, undo, zoomAt, zoomByStep,
 } from './view.js';
 import { closeSizeMenu, resetSizes, setInteractive } from './cards.js';
-import { adjustInspectLevel, clearHoverHighlight, hasHoverTarget } from './inspect.js';
+import {
+  adjustInspectLevel, clearHoverHighlight, hasHoverTarget, openCommentBoxAt,
+} from './inspect.js';
 import { saveSidebarWidth, saveSnapToGrid } from './storage.js';
 import { clamp, clampSidebarWidth, resizeZoneAt } from './utils.js';
 import {
@@ -52,6 +54,17 @@ export function setMode(next) {
 function isInsideInteractiveCard(event) {
   const target = /** @type {Element | null} */ (event.target);
   return Boolean(ui.interactiveFile && target?.closest?.('.card.is-interactive'));
+}
+
+/**
+ * O arquivo da tela sob o ponteiro — para os gestos que miram o protótipo
+ * (abrir a caixinha de comentário). `null` fora de qualquer card.
+ * @param {Event} event
+ * @returns {string | null}
+ */
+function pointerFile(event) {
+  const target = /** @type {Element | null} */ (event.target);
+  return /** @type {HTMLElement | null} */ (target?.closest?.('.card'))?.dataset.file ?? null;
 }
 
 /* ---------- Roda do mouse: nivel do destaque, zoom ou pan ---------- */
@@ -159,10 +172,19 @@ let panStarted = false;
 viewport.addEventListener('pointerdown', (event) => {
   // Botao esquerdo ou do meio.
   if (event.button !== 0 && event.button !== 1) return;
-  // Alt+clique e captura de XPath, nao pan: deixa o evento chegar ao escudo.
-  if (event.altKey) return;
-  // No modo ponteiro o arrasto com o esquerdo nao move o board (o do meio move).
-  if (ui.mode === 'pointer' && event.button === 0) return;
+
+  // No modo ponteiro o arrasto com o esquerdo nao move o board (o do meio
+  // move): o clique simples abre a caixinha de comentario no no sob o cursor.
+  // Ctrl+Alt+clique e captura de XPath, nao caixinha — deixa o evento seguir
+  // para o `click` do escudo, que e quem chama `copyXPathAt`.
+  if (ui.mode === 'pointer' && event.button === 0) {
+    if (!event.ctrlKey) {
+      const file = pointerFile(event);
+      if (file) openCommentBoxAt(file, event);
+    }
+    return;
+  }
+
   if (isInsideInteractiveCard(event)) return;
   // O titulo e a alca de arrasto da tela: ali o gesto move o card, nao o board.
   // Vale o titulo inteiro, inclusive o botao de tamanho — que precisa do clique.

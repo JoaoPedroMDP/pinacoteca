@@ -7,9 +7,13 @@
 // fica em try/catch: o iframe pode estar trocando de `src` no meio do gesto.
 
 import { ensureFloating } from './dom.js';
-import { screens, ui, view } from './state.js';
-import { clamp, computeXPath } from './utils.js';
+import {
+  commentQueue, notifyQueueChange, onQueueChange, screens, ui, view,
+} from './state.js';
+import { clamp, computeXPath, resolveXPath } from './utils.js';
 import { copyText, showToast } from './feedback.js';
+
+/** @typedef {import('./state.js').CommentItem} CommentItem */
 
 /** @typedef {import('./state.js').Screen} Screen */
 
@@ -218,8 +222,11 @@ export function adjustInspectLevel(delta, clientX, clientY) {
 }
 
 /**
- * Alt+clique: copia o XPath do elemento sob o cursor, para apontar ao agente de
- * IA exatamente qual pedaco da tela deve mudar.
+ * Ctrl+Alt+clique: copia o XPath do elemento sob o cursor, para apontar ao
+ * agente de IA exatamente qual pedaco da tela deve mudar. Alt sozinho, em vez
+ * disso, abre a caixinha de comentario (veja `openCommentBoxAt`) — quem decide
+ * qual dos dois gestos chamar e quem despacha o clique, em `controls.js` e
+ * `cards.js`.
  * @param {string} file
  * @param {MouseEvent} event
  */
@@ -234,6 +241,383 @@ export function copyXPathAt(file, event) {
   copyText(xpath);
   showToast(`XPath copiado — ${xpath}`);
 }
+
+/* ---------- Fila de comentarios ---------- */
+//
+// Cada item mora em `commentQueue` (state.js), chaveado por arquivo e XPath.
+// Este modulo e o unico que muta a fila diretamente: quem quiser redesenhar a
+// partir dela (aqui e em `chat.js`) se inscreve em `onQueueChange`.
+//
+// A caixinha aberta e estado de apresentacao, nao de dado — um item
+// `confirmed` reclicado reabre a caixinha sem mudar de status (o ciclo de vida
+// completo esta documentado no `design.md` da mudanca). Por isso quem esta
+// aberto agora vive fora do `CommentItem`, neste `Set` local.
+
+/** @type {Set<string>} chave = `${file} ${xpath}` */
+const openBoxKeys = new Set();
+
+/** @param {string} file @param {string} xpath */
+const boxKey = (file, xpath) => `${file} ${xpath}`;
+
+/**
+ * Posicao do elemento em coordenadas internas do iframe — o mesmo espaco que
+ * `frame.style` usa, entao o balao/caixinha fica correto sob pan/zoom sem
+ * recalculo (veja o `@property anchorPoint` em `state.js`).
+ * @param {Element} el
+ * @returns {{ x: number, y: number }}
+ */
+function anchorFor(el) {
+  const rect = el.getBoundingClientRect();
+  return { x: rect.left, y: rect.top };
+}
+
+/**
+ * Clique simples em modo ponteiro: abre a caixinha de comentario multi-linha
+ * para o no sob o cursor. Reclicar um no que ja tem item na fila reabre a
+ * caixinha pre-preenchida, editando o mesmo item em vez de criar outro.
+ * @param {string} file
+ * @param {MouseEvent | PointerEvent} event
+ */
+export function openCommentBoxAt(file, event) {
+  const screen = screens.get(file);
+  if (!screen) return;
+
+  const found = elementUnderCursor(screen, event.clientX, event.clientY);
+  if (!found) return;
+
+  const xpath = computeXPath(found.el);
+  const anchorPoint = anchorFor(found.el);
+
+  let items = commentQueue.get(file);
+  if (!items) {
+    items = new Map();
+    commentQueue.set(file, items);
+  }
+
+  const existing = items.get(xpath);
+  if (existing) {
+    existing.anchorPoint = anchorPoint;
+  } else {
+    /** @type {CommentItem} */
+    const item = { xpath, text: '', status: 'draft', anchorPoint };
+    items.set(xpath, item);
+  }
+
+  openBoxKeys.add(boxKey(file, xpath));
+  notifyQueueChange();
+}
+
+/**
+ * Enter (sem Shift) dentro da caixinha: confirma o item (`draft` -> `confirmed`,
+ * ou permanece `confirmed` se ja era) e fecha a caixinha, mostrando o balao.
+ * @param {string} file
+ * @param {string} xpath
+ */
+function confirmCommentItem(file, xpath) {
+  const item = commentQueue.get(file)?.get(xpath);
+  if (!item) return;
+
+  item.status = 'confirmed';
+  openBoxKeys.delete(boxKey(file, xpath));
+  notifyQueueChange();
+}
+
+/**
+ * Remove um item da fila — balao no board e linha na lista "a enviar" do chat,
+ * nos dois lugares de onde o botao "x" pode chamar isto. Ignorado enquanto o
+ * item estiver `sending`: a fila trancada nao aceita remocao.
+ * @param {string} file
+ * @param {string} xpath
+ */
+export function removeCommentItem(file, xpath) {
+  const items = commentQueue.get(file);
+  const item = items?.get(xpath);
+  if (!items || !item || item.status === 'sending') return;
+
+  items.delete(xpath);
+  if (items.size === 0) commentQueue.delete(file);
+  openBoxKeys.delete(boxKey(file, xpath));
+  notifyQueueChange();
+}
+
+/**
+ * Reancoragem apos o iframe recarregar: para cada item da fila daquele
+ * arquivo, tenta achar o XPath salvo no documento novo. Achou, atualiza a
+ * ancora (e sai de `unreferenced` se estava); nao achou, vira `unreferenced`
+ * — some do board e aparece na bandeja de pendentes.
+ * @param {string} file
+ * @param {Document | null | undefined} doc
+ */
+export function tryReanchor(file, doc) {
+  const items = commentQueue.get(file);
+  if (!items || !doc) return;
+
+  for (const item of items.values()) {
+    // Trancado por um envio em andamento: nao mexe, o turno decide o destino.
+    if (item.status === 'sending') continue;
+
+    const el = resolveXPath(doc, item.xpath);
+    if (el) {
+      item.anchorPoint = anchorFor(el);
+      if (item.status === 'unreferenced') item.status = 'confirmed';
+    } else {
+      item.status = 'unreferenced';
+      openBoxKeys.delete(boxKey(file, item.xpath));
+    }
+  }
+
+  notifyQueueChange();
+}
+
+/**
+ * Arrasto de um item sem referencia da bandeja ate um no valido: recalcula o
+ * XPath a partir do alvo largado e move o item de volta a `confirmed`. Se ja
+ * existir outro item no mesmo alvo (mesmo arquivo e XPath), o arrasto e
+ * ignorado — nao ha como reancorar sem sobrescrever o item que ja estava la.
+ * @param {string} fromFile
+ * @param {string} fromXPath
+ * @param {string} toFile
+ * @param {Element} toEl
+ */
+function reanchorUnreferencedItem(fromFile, fromXPath, toFile, toEl) {
+  const items = commentQueue.get(fromFile);
+  const item = items?.get(fromXPath);
+  if (!items || !item) return;
+
+  const newXPath = computeXPath(toEl);
+  const targetItems = commentQueue.get(toFile);
+  if (targetItems?.has(newXPath) && !(fromFile === toFile && fromXPath === newXPath)) return;
+
+  items.delete(fromXPath);
+  if (items.size === 0) commentQueue.delete(fromFile);
+
+  let destination = commentQueue.get(toFile);
+  if (!destination) {
+    destination = new Map();
+    commentQueue.set(toFile, destination);
+  }
+
+  item.xpath = newXPath;
+  item.status = 'confirmed';
+  item.anchorPoint = anchorFor(toEl);
+  destination.set(newXPath, item);
+
+  notifyQueueChange();
+}
+
+/**
+ * Camada dos baloes/caixinhas de uma tela, criada sob demanda dentro do
+ * `card` — nao do `frame` — assim ela herda o `transform` do canvas de graca
+ * (como o escudo), mas escapa do `overflow: hidden` do `.card-frame`, que
+ * cortava balao/caixinha perto da borda da tela. O CSS compensa o offset do
+ * titulo para o layer continuar alinhado ao topo do frame (veja
+ * `.pina-queue-layer` em board.css).
+ * @param {Screen} screen
+ * @returns {HTMLElement}
+ */
+function ensureQueueLayer(screen) {
+  let layer = /** @type {HTMLElement | null} */ (screen.card.querySelector(':scope > .pina-queue-layer'));
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.className = 'pina-queue-layer';
+    screen.card.append(layer);
+  }
+  return layer;
+}
+
+/**
+ * Badge "x" reaproveitado pelo balao, pela caixinha e pela bandeja de itens
+ * sem referencia.
+ * @param {() => void} onRemove
+ * @returns {HTMLButtonElement}
+ */
+function makeRemoveBadge(onRemove) {
+  const badge = document.createElement('button');
+  badge.type = 'button';
+  badge.className = 'pina-comment-remove';
+  badge.title = 'Remover comentario';
+  badge.textContent = '×';
+  // Sem isto o pointerdown do badge chegaria ao board por baixo (pan/drag).
+  badge.addEventListener('pointerdown', (event) => event.stopPropagation());
+  badge.addEventListener('click', (event) => {
+    event.stopPropagation();
+    onRemove();
+  });
+  return badge;
+}
+
+/**
+ * A caixinha multi-linha: Enter confirma, Shift+Enter quebra linha, digitar
+ * atualiza o texto do item ao vivo (a lista "a enviar" do chat acompanha).
+ * @param {string} file
+ * @param {CommentItem} item
+ * @returns {HTMLElement}
+ */
+function buildCommentBox(file, item) {
+  const box = document.createElement('div');
+  box.className = 'pina-comment-box';
+  box.style.left = `${item.anchorPoint?.x ?? 0}px`;
+  box.style.top = `${item.anchorPoint?.y ?? 0}px`;
+  // O board (escudo por baixo) nao deve iniciar pan/gesto por cima da caixinha.
+  box.addEventListener('pointerdown', (event) => event.stopPropagation());
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'pina-comment-input';
+  textarea.placeholder = 'Comentario para a IA...';
+  textarea.value = item.text;
+  textarea.addEventListener('input', () => {
+    item.text = textarea.value;
+    notifyQueueChange();
+  });
+  textarea.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    confirmCommentItem(file, item.xpath);
+  });
+
+  box.append(textarea, makeRemoveBadge(() => removeCommentItem(file, item.xpath)));
+  // A caixinha acabou de abrir: o usuario ja quer digitar. `setTimeout(0)` em
+  // vez de focar direto porque o elemento ainda nao esta no DOM neste ponto —
+  // quem chama `buildCommentBox` so anexa o resultado depois.
+  setTimeout(() => textarea.focus(), 0);
+  return box;
+}
+
+/**
+ * O balao: resumo do comentario ancorado no no, clicavel para reabrir a
+ * caixinha (menos em `sending`, quando mostra estado de carregamento).
+ * @param {string} file
+ * @param {CommentItem} item
+ * @returns {HTMLElement}
+ */
+function buildBalloon(file, item) {
+  const balloon = document.createElement('div');
+  balloon.className = 'pina-comment-balloon';
+  balloon.style.left = `${item.anchorPoint?.x ?? 0}px`;
+  balloon.style.top = `${item.anchorPoint?.y ?? 0}px`;
+
+  const summary = document.createElement('span');
+  summary.className = 'pina-comment-summary';
+  summary.textContent = item.text.length > 60 ? `${item.text.slice(0, 60)}…` : item.text;
+  balloon.append(summary);
+
+  if (item.status === 'sending') {
+    balloon.classList.add('is-sending');
+    balloon.append(Object.assign(document.createElement('span'), { className: 'pina-comment-spinner' }));
+    return balloon;
+  }
+
+  balloon.addEventListener('pointerdown', (event) => event.stopPropagation());
+  balloon.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openBoxKeys.add(boxKey(file, item.xpath));
+    notifyQueueChange();
+  });
+  balloon.append(makeRemoveBadge(() => removeCommentItem(file, item.xpath)));
+  return balloon;
+}
+
+/**
+ * Redesenha baloes e caixinhas de uma tela a partir da fila. Itens
+ * `unreferenced` ficam de fora — eles vao para a bandeja
+ * (`renderUnreferencedTray`), nao pro card.
+ * @param {string} file
+ */
+function renderQueueForFile(file) {
+  const screen = screens.get(file);
+  if (!screen) return;
+
+  const layer = ensureQueueLayer(screen);
+  layer.replaceChildren();
+
+  const items = commentQueue.get(file);
+  if (!items) return;
+
+  for (const item of items.values()) {
+    if (item.status === 'unreferenced' || !item.anchorPoint) continue;
+
+    const boxOpen = item.status !== 'sending' && openBoxKeys.has(boxKey(file, item.xpath));
+    layer.append(boxOpen ? buildCommentBox(file, item) : buildBalloon(file, item));
+  }
+}
+
+/**
+ * Uma linha da bandeja de pendentes de reancoragem.
+ * @param {string} file
+ * @param {CommentItem} item
+ * @returns {HTMLElement}
+ */
+function buildTrayEntry(file, item) {
+  const entry = document.createElement('div');
+  entry.className = 'pina-tray-entry';
+  entry.title = 'Arraste ate um no do prototipo para reancorar';
+
+  const label = document.createElement('span');
+  label.className = 'pina-tray-label';
+  label.textContent = `${file} — ${item.text || item.xpath}`;
+  entry.append(label);
+
+  entry.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    startUnreferencedDrag(file, item.xpath, event.pointerId);
+  });
+
+  entry.append(makeRemoveBadge(() => removeCommentItem(file, item.xpath)));
+  return entry;
+}
+
+/**
+ * Bandeja fixa (canto do board) com todo item `unreferenced`, de qualquer
+ * tela. Fica oculta (`hidden`) enquanto nao houver nenhum.
+ */
+function renderUnreferencedTray() {
+  const tray = ensureFloating('pina-unreferenced-tray', 'pina-unreferenced-tray');
+  tray.replaceChildren();
+
+  let count = 0;
+  for (const [file, items] of commentQueue) {
+    for (const item of items.values()) {
+      if (item.status !== 'unreferenced') continue;
+      count += 1;
+      tray.append(buildTrayEntry(file, item));
+    }
+  }
+
+  tray.hidden = count === 0;
+}
+
+/**
+ * Arrasto em andamento da bandeja de itens sem referencia ate um no do
+ * prototipo.
+ * @param {string} file
+ * @param {string} xpath
+ * @param {number} pointerId
+ */
+function startUnreferencedDrag(file, xpath, pointerId) {
+  /** @param {PointerEvent} event */
+  const onUp = (event) => {
+    if (event.pointerId !== pointerId) return;
+    window.removeEventListener('pointerup', onUp);
+
+    for (const screen of screens.values()) {
+      const found = elementUnderCursor(screen, event.clientX, event.clientY);
+      if (found) {
+        reanchorUnreferencedItem(file, xpath, screen.file, found.el);
+        return;
+      }
+    }
+  };
+
+  window.addEventListener('pointerup', onUp);
+}
+
+// Unico ponto que redesenha board e bandeja a partir da fila: cada mutacao
+// (aqui e em `chat.js`) so precisa chamar `notifyQueueChange`.
+onQueueChange(() => {
+  for (const file of screens.keys()) renderQueueForFile(file);
+  renderUnreferencedTray();
+});
 
 /* ---------- Tooltip ---------- */
 

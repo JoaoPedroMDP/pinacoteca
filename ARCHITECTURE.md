@@ -655,12 +655,15 @@ Duplo clique num card libera aquele card específico — o escudo some e o prot�
 receber cliques, para preencher formulário e navegar. `Esc` ou um clique fora devolve o
 controle ao board. Um card interativo por vez.
 
-**Alt+clique** num card copia o XPath do elemento sob o cursor. Como tudo é mesma origem,
-o cliente lê o elemento pelo `elementFromPoint` do iframe — convertendo as coordenadas do
-board (escaladas por `scale`) de volta ao espaço interno do iframe. O XPath usa `@id` quando
-existe, senão é absoluto com índices por irmão de mesma tag. Serve para apontar ao agente de
-IA exatamente qual pedaço da tela deve mudar. O `pointerdown` do pan ignora o evento quando
-`altKey` está pressionada, para o clique chegar ao escudo em vez de virar arrasto.
+**Ctrl+Alt+clique** num card copia o XPath do elemento sob o cursor. Como tudo é mesma
+origem, o cliente lê o elemento pelo `elementFromPoint` do iframe — convertendo as
+coordenadas do board (escaladas por `scale`) de volta ao espaço interno do iframe. O XPath
+usa `@id` quando existe, senão é absoluto com índices por irmão de mesma tag. Serve para
+apontar ao agente de IA exatamente qual pedaço da tela deve mudar. **Alt sozinho** (sem
+Ctrl), em vez de copiar, ativa o modo ponteiro e abre a caixinha de comentário do gesto
+abaixo — os dois gestos disputam o mesmo clique, e é o `ctrlKey` que decide qual dos dois
+roda. O `pointerdown` do pan devolve o clique ao escudo sempre que o modo já é ponteiro (com
+o botão esquerdo), para nenhum dos dois gestos virar arrasto do board.
 
 Uma tela recém-detectada (evento `add`, ou `change` de arquivo ainda não montado) recebe o
 foco: o board enquadra e centraliza nela automaticamente.
@@ -706,6 +709,36 @@ e só troca de nível a cada `WHEEL_STEP`, senão o touchpad — que dispara mui
 pequenos — pularia vários níveis por toque. Um **tooltip** ao
 lado do cursor mostra o alvo atual (`tag#id`/`tag.classe`) e a dica do scroll. Mover o cursor
 para um novo elemento reinicia o nível em 0.
+
+#### Fila de comentários endereçados à IA
+
+No modo ponteiro, clicar num nó sem nenhum modificador abre uma caixinha de comentário
+multi-linha ancorada nele — o `pointerdown` do pan chama `openCommentBoxAt` em vez de
+seguir para o `click` do escudo. Enter (sem Shift) confirma: a caixinha fecha e vira um
+balão sobre o nó; Shift+Enter só quebra linha. Reclicar um nó que já tem balão reabre a
+caixinha pré-preenchida, editando o mesmo item — a chave é o XPath do nó dentro do
+arquivo, então não há como duplicar item no mesmo lugar. Clicar fora da caixinha aberta
+não a fecha nem descarta o rascunho: só o Enter (confirma) ou o badge "x" (remove)
+mudam o item.
+
+A fila vive em `commentQueue` (`state.js`), `Map<arquivo, Map<xpath, CommentItem>>`; quem
+muta é só `inspect.js`, e tanto o board quanto o painel de chat se inscrevem em
+`onQueueChange` para redesenhar a partir dela — nenhum dos dois guarda cópia própria. O
+painel de chat espelha a fila numa lista "a enviar" (`chat.js`), com o mesmo botão "x" por
+item; removê-lo em qualquer um dos dois lados chama o mesmo `removeCommentItem` e some dos
+dois. Ao apertar Enviar com algo na fila, `serializeCommentQueue` (`utils.js`, função pura)
+numera XPath e comentário de cada item numa única mensagem, que vai concatenada com o texto
+do compositor (fila primeiro) numa única chamada a `chat.transport.send`. A partir daí a
+fila entra em `sending`: os balões mostram carregamento e perdem o "x" até `chat.running`
+voltar a `false`, quando o turno termina e eles somem da fila.
+
+Se o iframe recarrega com itens pendentes, o `load` de `cards.js` chama `tryReanchor`, que
+tenta `resolveXPath` (inverso de `computeXPath`, em `utils.js`) no documento novo para cada
+item daquele arquivo. Achou, atualiza a âncora; não achou, o item vira `unreferenced` e sai
+do card para uma bandeja fixa num canto do board (visível só quando há algum item nesse
+estado) — arrastá-lo dali até um nó válido (mesma tela ou outra) recalcula o XPath e o
+devolve a `confirmed`. Um item ainda `unreferenced` no momento do Enviar é descartado da
+mensagem e sai da fila.
 
 #### Recarregamento
 
@@ -908,6 +941,7 @@ E o que **fica por conta do usuário**, dito sem rodeio:
    | Atalho de teclado, botão, gesto | `src/client/controls.js` |
    | Largura da sidebar | `src/client/controls.js` |
    | Destaque de elemento, XPath | `src/client/inspect.js` |
+   | Fila de comentários endereçados à IA (caixinha, balão, reancoragem) | `src/client/inspect.js` (fila e gesto), `src/client/chat.js` (lista "a enviar" e envio) |
    | Uma rota nova | `src/server/index.js` |
    | Um tipo de evento novo do watcher | `src/server/watcher.js` **e** `src/client/sse.js` |
    | O que é ou não um protótipo | `src/server/screens.js` |
