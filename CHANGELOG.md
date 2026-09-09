@@ -1,3 +1,9 @@
+## 0.12.0 (2026-09-09)
+
+### Feat
+
+- Agora esconde o campo de apikey quando uma sessão é identificada. Mostra caso o usuário queira
+
 ## 0.11.1 (2026-09-09)
 
 ### Fix
