@@ -11,6 +11,7 @@
 // `applyEvent` (`chat-client.js`) e na tabela de eventos do ARCHITECTURE.md —
 // os tres ou nenhum.
 
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -321,9 +322,10 @@ export function interrupt(sessionId) {
 const AMBIENT_CREDENTIAL_VARS = ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_PROFILE'];
 
 /**
- * Onde o `claude login` grava a sessao — `~/.claude/.credentials.json`, ou
- * `$CLAUDE_CONFIG_DIR/.credentials.json` quando essa variavel existe. Mesma
- * resolucao que o proprio SDK usa por baixo.
+ * Onde o `claude login` grava a sessao no Linux — `~/.claude/.credentials.json`,
+ * ou `$CLAUDE_CONFIG_DIR/.credentials.json` quando essa variavel existe. Mesma
+ * resolucao que o proprio SDK usa por baixo. No macOS o login nunca cria esse
+ * arquivo: a sessao vai para o Keychain (veja `hasKeychainCredential`).
  *
  * @param {Record<string, string | undefined>} env
  * @returns {string}
@@ -333,27 +335,82 @@ function credentialsFilePath(env) {
   return path.join(configDir, '.credentials.json');
 }
 
+// Servico sob o qual o `claude login` grava a sessao no Keychain do macOS —
+// mesmo nome usado pelo proprio CLI.
+const KEYCHAIN_SERVICE = 'Claude Code-credentials';
+
+/**
+ * Conta do Keychain que guarda a sessao: o CLI usa o usuario do sistema
+ * operacional, com `$USER` como atalho quando ele esta definido.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+function keychainAccount(env) {
+  return env.USER || os.userInfo().username;
+}
+
+/**
+ * Ha sessao do `claude login` gravada no Keychain do macOS? E la que essa
+ * plataforma guarda a sessao — o CLI nunca cria `.credentials.json` nela.
+ * Roda `security find-generic-password` (mesmo comando que o CLI usa para
+ * ler a propria sessao) e considera credencial presente quando ele sai com
+ * sucesso e devolve algo. Qualquer falha — sem entrada, Keychain bloqueado,
+ * `security` ausente — vira `false`, nunca lanca: mesma semantica de
+ * "arquivo nao existe" que o `fileExists` de `hasAmbientCredential` ja tem.
+ *
+ * `execFileSyncFn` e injetavel para o teste de unidade nao depender de
+ * Keychain real nem da plataforma de quem roda o teste.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @param {(file: string, args: string[], options: import('node:child_process').ExecFileSyncOptionsWithStringEncoding) => string} [execFileSyncFn]
+ * @returns {boolean}
+ */
+export function hasKeychainCredential(env, execFileSyncFn = execFileSync) {
+  try {
+    const stdout = execFileSyncFn(
+      'security',
+      ['find-generic-password', '-a', keychainAccount(env), '-w', '-s', KEYCHAIN_SERVICE],
+      { encoding: 'utf-8', timeout: 10_000, windowsHide: true },
+    );
+    return typeof stdout === 'string' && stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Ha sessao do Claude Code no ambiente? E o que autentica de graca numa
  * maquina ja logada num plano Pro/Max (`claude login`), sem gastar credito de
  * API nenhum — so entra crédito quando a pinacoteca usa uma chave propria.
  *
  * O login por si so nao passa por variavel de ambiente nenhuma: ele grava a
- * sessao em `.credentials.json` (veja `credentialsFilePath`), e e de la que o
- * SDK autentica quando nao ha `ANTHROPIC_API_KEY` no ambiente. As variaveis em
+ * sessao em disco, e e de la que o SDK autentica quando nao ha
+ * `ANTHROPIC_API_KEY` no ambiente. Onde exatamente depende da plataforma —
+ * `.credentials.json` (veja `credentialsFilePath`) em toda parte menos no
+ * macOS, que usa o Keychain (veja `hasKeychainCredential`). As variaveis em
  * `AMBIENT_CREDENTIAL_VARS` cobrem so o caso de alguem exportar a credencial
  * manualmente — a maioria das maquinas logadas nao tem nenhuma delas.
  *
- * `fileExists` e injetavel para o teste de unidade nao depender do disco real.
+ * `fileExists`, `platform` e `hasKeychain` sao injetaveis para o teste de
+ * unidade nao depender do disco, do Keychain nem da plataforma reais.
  *
  * @param {Record<string, string | undefined>} env
  * @param {(path: string) => boolean} [fileExists]
+ * @param {string} [platform]
+ * @param {(env: Record<string, string | undefined>) => boolean} [hasKeychain]
  * @returns {boolean}
  */
-export function hasAmbientCredential(env, fileExists = existsSync) {
+export function hasAmbientCredential(
+  env,
+  fileExists = existsSync,
+  platform = os.platform(),
+  hasKeychain = hasKeychainCredential,
+) {
   const hasEnvCredential = ['ANTHROPIC_API_KEY', ...AMBIENT_CREDENTIAL_VARS]
     .some((name) => typeof env[name] === 'string' && env[name] !== '');
-  return hasEnvCredential || fileExists(credentialsFilePath(env));
+  if (hasEnvCredential) return true;
+  return platform === 'darwin' ? hasKeychain(env) : fileExists(credentialsFilePath(env));
 }
 
 /**
@@ -363,10 +420,12 @@ export function hasAmbientCredential(env, fileExists = existsSync) {
  * @param {string} apiKey chave gravada na configuracao; vazia quando nao ha
  * @param {Record<string, string | undefined>} env
  * @param {(path: string) => boolean} [fileExists] injetavel, ver `hasAmbientCredential`
+ * @param {string} [platform] injetavel, ver `hasAmbientCredential`
+ * @param {(env: Record<string, string | undefined>) => boolean} [hasKeychain] injetavel, ver `hasAmbientCredential`
  * @returns {boolean}
  */
-export function hasCredential(apiKey, env, fileExists = existsSync) {
-  return apiKey.length > 0 || hasAmbientCredential(env, fileExists);
+export function hasCredential(apiKey, env, fileExists = existsSync, platform = os.platform(), hasKeychain = hasKeychainCredential) {
+  return apiKey.length > 0 || hasAmbientCredential(env, fileExists, platform, hasKeychain);
 }
 
 /**

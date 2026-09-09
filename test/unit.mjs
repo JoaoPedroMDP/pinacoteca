@@ -18,7 +18,8 @@ import { mimeTypeFor, resolveInside } from '../src/server/http.js';
 import { isForbiddenPreviewPath, isHtmlFile, isIgnoredDir, listScreens } from '../src/server/screens.js';
 import { DEFAULT_CONFIG, mergeConfig, publicConfig } from '../src/server/config.js';
 import {
-  agentEnv, buildDiff, escapingPath, hasAmbientCredential, hasCredential, translateMessage,
+  agentEnv, buildDiff, escapingPath, hasAmbientCredential, hasCredential, hasKeychainCredential,
+  translateMessage,
 } from '../src/server/agent.js';
 import { commentQueue, source } from '../src/client/state.js';
 import {
@@ -275,34 +276,74 @@ test('translateMessage ignora mensagem que nao interessa ao board', () => {
 // isso o default (`existsSync` de verdade) leria o disco de quem roda o
 // teste, e a maquina do desenvolvedor poderia estar logada de verdade.
 const noCredentialFile = () => false;
+// Fake de Keychain que nunca deveria ser chamado — usado para provar que
+// plataforma nao-macOS nem consulta o Keychain.
+const keychainNaoDeveriaSerChamado = () => { throw new Error('Keychain nao deveria ser consultado nesta plataforma'); };
+// Platform fixa em toda chamada que nao testa o ramo do macOS, para o teste
+// nao depender de rodar numa maquina Linux ou macOS de verdade.
+const LINUX = 'linux';
+const MACOS = 'darwin';
 
 test('hasAmbientCredential pega qualquer credencial de ambiente aceita', () => {
-  assert.equal(hasAmbientCredential({}, noCredentialFile), false);
-  assert.equal(hasAmbientCredential({ ANTHROPIC_API_KEY: 'sk-ant-y' }, noCredentialFile), true);
-  assert.equal(hasAmbientCredential({ CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, noCredentialFile), true);
-  assert.equal(hasAmbientCredential({ ANTHROPIC_AUTH_TOKEN: 'tok' }, noCredentialFile), true);
-  assert.equal(hasAmbientCredential({ ANTHROPIC_PROFILE: 'work' }, noCredentialFile), true);
-  assert.equal(hasAmbientCredential({ CLAUDE_CODE_OAUTH_TOKEN: '' }, noCredentialFile), false);
+  assert.equal(hasAmbientCredential({}, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), false);
+  assert.equal(hasAmbientCredential({ ANTHROPIC_API_KEY: 'sk-ant-y' }, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), true);
+  assert.equal(hasAmbientCredential({ CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), true);
+  assert.equal(hasAmbientCredential({ ANTHROPIC_AUTH_TOKEN: 'tok' }, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), true);
+  assert.equal(hasAmbientCredential({ ANTHROPIC_PROFILE: 'work' }, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), true);
+  assert.equal(hasAmbientCredential({ CLAUDE_CODE_OAUTH_TOKEN: '' }, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), false);
 });
 
-test('hasAmbientCredential tambem aceita a sessao gravada por `claude login`', () => {
+test('hasAmbientCredential tambem aceita a sessao gravada por `claude login` (Linux)', () => {
   // Sem nenhuma variavel de ambiente — so o arquivo de credenciais, que e como
-  // o login de verdade fica guardado.
-  assert.equal(hasAmbientCredential({}, () => true), true);
+  // o login de verdade fica guardado fora do macOS.
+  assert.equal(hasAmbientCredential({}, () => true, LINUX, keychainNaoDeveriaSerChamado), true);
+});
+
+test('hasAmbientCredential no macOS consulta o Keychain, nao o arquivo', () => {
+  // Sessao presente no Keychain: nem olha para o arquivo (que no macOS nunca
+  // existe de verdade).
+  assert.equal(hasAmbientCredential({}, noCredentialFile, MACOS, () => true), true);
+  // Sem sessao no Keychain e sem variavel de ambiente: nenhuma credencial.
+  assert.equal(hasAmbientCredential({}, noCredentialFile, MACOS, () => false), false);
+  // Variavel de ambiente ainda tem prioridade e nem chega a consultar o Keychain.
+  assert.equal(
+    hasAmbientCredential({ ANTHROPIC_API_KEY: 'sk-ant-y' }, noCredentialFile, MACOS, keychainNaoDeveriaSerChamado),
+    true,
+  );
+});
+
+test('hasKeychainCredential aceita quando `security` sai com sucesso e devolve algo', () => {
+  const security = () => 'segredo-do-keychain\n';
+  assert.equal(hasKeychainCredential({}, security), true);
+});
+
+test('hasKeychainCredential recusa saida vazia ou erro do `security`', () => {
+  assert.equal(hasKeychainCredential({}, () => ''), false);
+  assert.equal(hasKeychainCredential({}, () => { throw new Error('sem entrada'); }), false);
+});
+
+test('hasKeychainCredential usa `$USER` como conta quando definido', () => {
+  let contaUsada;
+  /** @param {string} _file @param {string[]} args */
+  const security = (_file, args) => { contaUsada = args[args.indexOf('-a') + 1]; return 'ok'; };
+  hasKeychainCredential({ USER: 'joao' }, security);
+  assert.equal(contaUsada, 'joao');
 });
 
 test('hasCredential aceita a chave gravada antes de olhar o ambiente', () => {
-  assert.equal(hasCredential('sk-ant-x', {}, noCredentialFile), true);
-  assert.equal(hasCredential('', {}, noCredentialFile), false);
+  assert.equal(hasCredential('sk-ant-x', {}, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), true);
+  assert.equal(hasCredential('', {}, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), false);
 });
 
 test('hasCredential aceita a credencial de ambiente quando nao ha chave gravada', () => {
-  assert.equal(hasCredential('', { CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, noCredentialFile), true);
-  assert.equal(hasCredential('', { ANTHROPIC_API_KEY: 'sk-ant-y' }, noCredentialFile), true);
+  assert.equal(hasCredential('', { CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), true);
+  assert.equal(hasCredential('', { ANTHROPIC_API_KEY: 'sk-ant-y' }, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), true);
   // String vazia nao e credencial.
-  assert.equal(hasCredential('', { ANTHROPIC_API_KEY: '' }, noCredentialFile), false);
+  assert.equal(hasCredential('', { ANTHROPIC_API_KEY: '' }, noCredentialFile, LINUX, keychainNaoDeveriaSerChamado), false);
   // Sessao de `claude login` (arquivo de credenciais) tambem basta.
-  assert.equal(hasCredential('', {}, () => true), true);
+  assert.equal(hasCredential('', {}, () => true, LINUX, keychainNaoDeveriaSerChamado), true);
+  // No macOS, a sessao vem do Keychain, nao do arquivo.
+  assert.equal(hasCredential('', {}, noCredentialFile, MACOS, () => true), true);
 });
 
 test('agentEnv com chave configurada tira as credenciais de ambiente', () => {

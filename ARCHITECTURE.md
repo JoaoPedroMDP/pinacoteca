@@ -232,15 +232,27 @@ a sessão já basta, mas continua com o campo de chave à mão: colar uma ali é
 escolher crédito de API mesmo tendo sessão — por exemplo, para não gastar a cota do plano.
 
 `hasAmbientCredential` não olha só variável de ambiente: o `claude login` de verdade não
-exporta nenhuma das de cima, ele grava a sessão em `~/.claude/.credentials.json` (ou
-`$CLAUDE_CONFIG_DIR/.credentials.json`), e é de lá que o SDK autentica quando não há
-`ANTHROPIC_API_KEY` no ambiente — mesma resolução de caminho nos dois lados. Por isso a
-função checa esse arquivo além das variáveis; a versão que só olhava o ambiente relatava
-"sem credencial" numa máquina logada de verdade, e o turno morria com o erro genérico da
-falta de chave antes até de tentar. `fileExists` entra como parâmetro injetável (padrão
-`existsSync`) só para o teste de unidade não depender do disco real; os testes ponta a
-ponta isolam a sessão real do desenvolvedor apontando `CLAUDE_CONFIG_DIR` para uma pasta
-temporária vazia, do mesmo jeito que já isolam `XDG_CONFIG_HOME`.
+exporta nenhuma das de cima, ele grava a sessão em disco — mas onde depende da plataforma.
+Fora do macOS é `~/.claude/.credentials.json` (ou `$CLAUDE_CONFIG_DIR/.credentials.json`),
+e é de lá que o SDK autentica quando não há `ANTHROPIC_API_KEY` no ambiente — mesma
+resolução de caminho nos dois lados. Por isso a função checa esse arquivo além das
+variáveis; a versão que só olhava o ambiente relatava "sem credencial" numa máquina logada
+de verdade, e o turno morria com o erro genérico da falta de chave antes até de tentar.
+`fileExists` entra como parâmetro injetável (padrão `existsSync`) só para o teste de
+unidade não depender do disco real; os testes ponta a ponta isolam a sessão real do
+desenvolvedor apontando `CLAUDE_CONFIG_DIR` para uma pasta temporária vazia, do mesmo jeito
+que já isolam `XDG_CONFIG_HOME`.
+
+No macOS o `claude login` nunca cria esse arquivo: a sessão vai para o Keychain do sistema,
+sob o serviço `Claude Code-credentials` e a conta do usuário do sistema operacional — mesmo
+lugar e mesmo comando (`security find-generic-password`) que o próprio CLI usa para ler a
+própria sessão. `hasAmbientCredential` recebe `platform` (padrão `os.platform()`) e, no
+ramo `'darwin'`, chama `hasKeychainCredential` em vez de `fileExists` — checar o arquivo ali
+não adiantaria, ele nunca existe nessa plataforma. Qualquer falha do `security` (sem
+entrada, Keychain bloqueado, binário ausente) vira "sem credencial", nunca lança: mesma
+semântica de "arquivo não existe" que já valia para o `fileExists`. `platform` e a função de
+Keychain (`hasKeychain`) também são injetáveis, pelo mesmo motivo do `fileExists`: o teste
+de unidade não pode depender da plataforma nem do Keychain de quem roda o teste.
 
 Esse campo não entra em `publicConfig`: ele não é gravado em `config.json`, é uma
 capacidade do **processo do servidor** naquele instante. Por isso é composto na rota
