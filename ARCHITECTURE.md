@@ -811,6 +811,8 @@ pinacoteca/
 │  ├─ harness.mjs  # encanação do e2e: fixture, servidor, Chrome, asserções
 │  ├─ e2e.mjs      # comportamento observável no navegador
 │  └─ unit.mjs     # funções puras
+├─ scripts/
+│  └─ build-install.sh  # check + npm pack + npm install -g da versão local
 ├─ eslint.config.js
 ├─ jsconfig.json
 ├─ README.md
@@ -890,10 +892,17 @@ O projeto não tem build, mas tem três verificações. `npm run check` roda as 
 | `npm run lint` | `eslint .` — variável não usada, `var`, `==`, função que cresceu demais |
 | `npm run typecheck` | `tsc` sobre o JSDoc (`jsconfig.json`, `checkJs` + `strict`) |
 | `npm test` | unitário e ponta a ponta |
+| `npm run build-install` | roda `check`, empacota com `npm pack` e instala o `.tgz` globalmente — testa a versão local mais recente do CLI como se publicada fosse |
 
 O lint separa os globais do servidor dos do navegador, e o cliente não ganha global novo
 à toa: `chat-client.js` usa `globalThis.TextDecoder` e `globalThis.AbortController`
 justamente para não precisar declarar mais nada na lista do navegador.
+
+`scripts/build-install.sh` fica fora de `src/` de propósito: não é código do produto,
+é ferramenta de desenvolvimento. Ele para antes de gerar o `.tgz` se `check` falhar, e
+o `trap` de limpeza remove o `.tgz` gerado tanto no sucesso quanto quando a instalação
+global falha depois do empacotamento — nenhuma execução deixa artefato para trás no
+repositório.
 
 Todo arquivo `.js` começa com `// @ts-check` e descreve os parâmetros em JSDoc. Não há
 TypeScript no código e não há passo de build: o editor e o `tsc` leem os comentários. É o
