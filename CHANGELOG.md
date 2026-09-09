@@ -1,3 +1,9 @@
+## 0.11.1 (2026-09-09)
+
+### Fix
+
+- Passa a verificar keychain se for macos
+
 ## 0.11.0 (2026-09-09)
 
 ### Feat
