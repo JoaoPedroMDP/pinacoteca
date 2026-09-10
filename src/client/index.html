@@ -21,22 +21,9 @@
         <span id="screen-count" class="badge">0</span>
       </header>
       <nav id="screen-list" class="screen-list"></nav>
-      <footer class="sidebar-footer">
-        <div id="root-path" class="root-path"></div>
-        <div class="sidebar-status">
-          <span id="connection" class="connection" data-state="connecting">conectando</span>
-          <span id="version" class="version"></span>
-        </div>
-      </footer>
     </div>
 
     <div id="tab-chat" role="tabpanel" aria-labelledby="sidebar-tab-chat" hidden>
-      <div id="chat-settings">
-        <input type="password" id="chat-key-input" placeholder="Chave de API da Anthropic">
-        <button type="button" id="chat-key-save">Salvar</button>
-        <button type="button" id="chat-credential-note" class="chat-credential-note" hidden></button>
-      </div>
-
       <div id="chat-log">
         <p id="chat-empty" class="muted">Ainda nao ha mensagens.</p>
       </div>
@@ -74,6 +61,15 @@
         </div>
       </form>
     </div>
+
+    <footer class="sidebar-footer">
+      <div id="root-path" class="root-path"></div>
+      <div class="sidebar-status">
+        <span id="connection" class="connection" data-state="connecting">conectando</span>
+        <span id="version" class="version"></span>
+        <button type="button" id="settings-open" class="settings-open" title="Configuracoes">⚙</button>
+      </div>
+    </footer>
   </aside>
 
   <div id="sidebar-resizer" role="separator" aria-orientation="vertical"
@@ -100,6 +96,38 @@
     </div>
 
   </main>
+
+  <dialog id="settings-dialog">
+    <div id="settings-header">
+      <h2>Configuracoes</h2>
+      <button type="button" id="settings-close" title="Fechar">×</button>
+    </div>
+
+    <div id="settings-body">
+      <nav id="settings-nav">
+        <button type="button" class="settings-nav-item" data-category="general">General</button>
+        <button type="button" class="settings-nav-item" data-category="models">Models</button>
+        <nav id="settings-model-nav">
+          <button type="button" class="settings-nav-item settings-nav-subitem"
+            data-model-category="claude">Claude</button>
+        </nav>
+      </nav>
+
+      <div id="settings-panels">
+        <div id="settings-panel-general" class="settings-panel">
+          <p class="muted">Nenhuma configuracao geral por aqui ainda.</p>
+        </div>
+
+        <div id="settings-panel-models" class="settings-panel" hidden>
+          <div id="settings-model-panel-claude" class="settings-model-panel">
+            <input type="password" id="chat-key-input" placeholder="Chave de API da Anthropic">
+            <button type="button" id="chat-key-save">Salvar</button>
+            <p id="chat-credential-note" class="chat-credential-note" hidden></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
 
   <script type="module" src="/app/board.js"></script>
 </body>

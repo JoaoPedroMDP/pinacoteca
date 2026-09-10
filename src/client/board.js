@@ -32,6 +32,7 @@ import { setSidebarWidth, setSnapToGrid } from './controls.js'; // tambem regist
 import { showTab } from './tabs.js'; // tambem registra o listener das abas
 import { initChat } from './chat.js';
 import { connectChat } from './chat-client.js';
+import { initSettings } from './settings.js';
 
 /**
  * @typedef {{ root: string, version: string, screens: string[] }} ScreensResponse
@@ -68,7 +69,9 @@ await loadScreens();
 // Depois da carga de proposito: o rascunho e o historico da conversa sao por
 // raiz observada, e a raiz so e conhecida a partir de `/api/screens`.
 initChat();
-// Depois do `initChat`: `connectChat` pinta na interface o que o servidor sabe
-// (se ha chave, se a aprovacao e automatica), e o `initChat` sobrescreveria.
+initSettings();
+// Depois do `initChat`/`initSettings`: `connectChat` pinta na interface o que
+// o servidor sabe (se ha chave, se a aprovacao e automatica), e os dois
+// `init*` sobrescreveriam.
 await connectChat();
 connectEvents();

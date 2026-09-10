@@ -39,10 +39,6 @@ export const chatLog = required('chat-log');
 export const chatEmpty = required('chat-empty');
 export const chatQueue = required('chat-queue');
 export const chatQueueList = required('chat-queue-list');
-export const chatSettings = required('chat-settings');
-export const chatCredentialNote = required('chat-credential-note');
-export const chatKeyInput = required('chat-key-input');
-export const chatKeySave = required('chat-key-save');
 export const chatComposer = required('chat-composer');
 export const chatInput = required('chat-input');
 export const chatSend = required('chat-send');
@@ -51,6 +47,20 @@ export const chatStop = required('chat-stop');
 export const chatModel = required('chat-model');
 export const chatEffort = required('chat-effort');
 export const chatAuto = required('chat-auto');
+
+/* ---------- Configuracoes ---------- */
+
+export const settingsOpen = required('settings-open');
+export const settingsDialog = /** @type {HTMLDialogElement} */ (required('settings-dialog'));
+export const settingsClose = required('settings-close');
+export const settingsBody = required('settings-body');
+export const settingsNav = required('settings-nav');
+export const settingsPanelGeneral = required('settings-panel-general');
+export const settingsPanelModels = required('settings-panel-models');
+export const settingsModelPanelClaude = required('settings-model-panel-claude');
+export const chatCredentialNote = required('chat-credential-note');
+export const chatKeyInput = required('chat-key-input');
+export const chatKeySave = required('chat-key-save');
 
 /** A toolbar fica *dentro* do viewport — veja o tratamento no `controls.js`. */
 export const toolbar = /** @type {HTMLElement} */ (document.querySelector('.toolbar'));

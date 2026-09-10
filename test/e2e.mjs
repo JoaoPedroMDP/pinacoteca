@@ -684,13 +684,21 @@ check('a aba Conversa fica marcada selecionada', await board.evaluate(
 // A lista de telas tem `display: flex` no CSS, que vence o `hidden` da folha do
 // agente. Sem o par `#tab-screens[hidden]` os dois paineis dividem a altura e a
 // conversa abre so ate a metade — por isso a medida, e nao so o `hidden`.
-check('a conversa ocupa a sidebar inteira abaixo das abas', await board.evaluate(`(() => {
+//
+// O footer (`.sidebar-footer`) mora fora dos dois paineis, para ficar visivel
+// nas duas abas — entao a conversa ocupa o que resta abaixo das abas *e*
+// acima do footer, nao a sidebar inteira.
+check('a conversa ocupa a sidebar abaixo das abas e acima do footer', await board.evaluate(`(() => {
   const screensHeight = document.getElementById('tab-screens').getBoundingClientRect().height;
   const chat = document.getElementById('tab-chat').getBoundingClientRect().height;
   const tabs = document.getElementById('sidebar-tabs').getBoundingClientRect().height;
+  const footer = document.querySelector('.sidebar-footer').getBoundingClientRect().height;
   const sidebar = document.getElementById('sidebar').getBoundingClientRect().height;
-  return screensHeight === 0 && Math.abs(chat - (sidebar - tabs)) < 1;
+  return screensHeight === 0 && Math.abs(chat - (sidebar - tabs - footer)) < 1;
 })()`));
+
+check('o icone de engrenagem continua visivel na aba Conversa', await board.evaluate(
+  "!!document.getElementById('settings-open').offsetHeight"));
 
 await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
 await checkEventually('voltar para Telas mostra a lista de novo e esconde a conversa', async () => (
@@ -884,7 +892,7 @@ await checkEventually('rejeitar fecha o pedido de permissao', async () => (
 
 process.stdout.write('\nTransporte da conversa\n');
 
-const settingsVisible = () => board.evaluate("!document.getElementById('chat-settings').hidden");
+const settingsOpen = () => board.evaluate("document.getElementById('settings-dialog').open");
 const keyFieldVisible = () => board.evaluate(
   "!document.getElementById('chat-key-input').hidden "
   + "&& !document.getElementById('chat-key-save').hidden");
@@ -896,51 +904,67 @@ const lastAssistant = () => lastOf('#chat-log .chat-msg.is-assistant');
 const errorCount = () => board.evaluate("document.querySelectorAll('#chat-log .chat-error').length");
 const sessionId = () => board.evaluate("import('/app/state.js').then((m) => m.chat.sessionId)");
 
-check('sem chave gravada, o painel de configuracao fica a vista', await settingsVisible());
 check('sem chave nem sessao logada, a rota nao aponta credencial de ambiente',
   (await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasAmbientCredential === false);
+
+// A modal comeca fechada; o icone de engrenagem no rodape do sidebar a abre.
+check('a modal de configuracoes comeca fechada', !(await settingsOpen()));
+await board.evaluate("document.getElementById('settings-open').click()");
+check('o icone de engrenagem abre a modal', await settingsOpen());
+check('a modal abre na categoria General', await board.evaluate(
+  "!document.getElementById('settings-panel-general').hidden "
+  + "&& document.getElementById('settings-panel-models').hidden"));
+
+// Trocar para Models > Claude mostra o campo de chave, sempre visivel — sem
+// fold, diferente do painel antigo da aba Conversa.
+await board.evaluate("document.querySelector('[data-category=\"models\"]').click()");
 check('sem credencial de ambiente, o aviso de sessao fica escondido',
   await board.evaluate("document.getElementById('chat-credential-note').hidden"));
 check('sem chave e sem sessao, o campo de chave fica sempre a vista', await keyFieldVisible());
 
-// `setHasAmbientCredential` e a mesma funcao que `chat-client.js` chama com o
-// que a rota devolveu — aqui ela e exercitada direto, simulando a maquina que
-// tem uma sessao do Claude Code mas nenhuma chave gravada na pinacoteca.
+// `setHasAmbientCredential` (agora em `settings.js`) e a mesma funcao que
+// `chat-client.js` chama com o que a rota devolveu — aqui ela e exercitada
+// direto, simulando a maquina que tem uma sessao do Claude Code mas nenhuma
+// chave gravada na pinacoteca.
 await board.evaluate(
-  "import('/app/chat.js').then((m) => m.setHasAmbientCredential(true))");
+  "import('/app/settings.js').then((m) => m.setHasAmbientCredential(true))");
 check('sessao detectada acende o aviso mesmo sem chave', await board.evaluate(
   "!document.getElementById('chat-credential-note').hidden "
   + "&& document.getElementById('chat-credential-note').textContent.length > 0"));
-check('e o campo de chave some por padrao, para nao competir com o aviso',
-  !(await keyFieldVisible()));
+check('e o campo de chave continua a vista, sem fold', await keyFieldVisible());
 
-// O aviso e o proprio controle: clicar nele revela o campo, para quem quiser
-// trocar a sessao por credito de API mesmo tendo uma sessao detectada.
-await board.evaluate("document.getElementById('chat-credential-note').click()");
-check('clicar no aviso revela o campo de chave', await keyFieldVisible());
-
-// Perder a sessao com o campo ja revelado nao pode escondê-lo de novo: sem
-// chave e sem sessao, ele volta a ser o unico caminho disponivel.
 await board.evaluate(
-  "import('/app/chat.js').then((m) => m.setHasAmbientCredential(false))");
+  "import('/app/settings.js').then((m) => m.setHasAmbientCredential(false))");
 check('tirar a sessao apaga o aviso', await board.evaluate(
   "document.getElementById('chat-credential-note').hidden"));
-check('e o campo de chave, ja revelado, continua a vista sem a sessao',
-  await keyFieldVisible());
+check('e o campo de chave continua a vista sem a sessao', await keyFieldVisible());
+
+// Fechar a modal (controle explicito) nao afeta o resto da interface.
+await board.evaluate("document.getElementById('settings-close').click()");
+check('o controle de fechar fecha a modal', !(await settingsOpen()));
+
+// Clique fora do conteudo (no `<dialog>`, fora do wrapper interno) fecha a
+// modal tambem.
+await board.evaluate("document.getElementById('settings-open').click()");
+await board.evaluate(
+  "document.getElementById('settings-dialog').dispatchEvent(new MouseEvent('click'))");
+check('clicar fora do conteudo fecha a modal', !(await settingsOpen()));
 
 // A chave falsa vai pela propria interface: e o caminho que o usuario percorre,
 // e e ele que exercita `saveKey`. Nenhuma chamada a API da Anthropic acontece —
 // so a gravacao no `XDG_CONFIG_HOME` temporario.
+await board.evaluate("document.getElementById('settings-open').click()");
+await board.evaluate("document.querySelector('[data-category=\"models\"]').click()");
 await board.evaluate(`(() => {
   const input = document.getElementById('chat-key-input');
   input.value = 'sk-ant-teste-falsa';
   document.getElementById('chat-key-save').click();
 })()`);
 
-await checkEventually('gravar a chave esconde o painel de configuracao',
-  async () => !(await settingsVisible()));
-check('o servidor passa a responder que tem chave',
-  (await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasKey === true);
+await checkEventually('o servidor passa a responder que tem chave', async () => (
+  await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasKey === true);
+check('o campo de chave continua a vista mesmo com chave gravada', await keyFieldVisible());
+await board.evaluate("document.getElementById('settings-close').click()");
 
 // O parser de SSE, sozinho: comentario ignorado, varias linhas `data:` do mesmo
 // evento juntadas e o bloco sem terminador guardado para o proximo pedaco.

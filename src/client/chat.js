@@ -15,9 +15,8 @@ import {
   CHAT_TOOL_INPUT_CHARS, CHAT_UNDO_GROUP_MS, CHAT_UNDO_LIMIT,
 } from './constants.js';
 import {
-  chatAuto, chatComposer, chatCredentialNote, chatEffort, chatEmpty, chatInput, chatKeyInput,
-  chatKeySave, chatLog, chatModel, chatQueue, chatQueueList, chatSend, chatSendMode,
-  chatSettings, chatStop,
+  chatAuto, chatComposer, chatEffort, chatEmpty, chatInput,
+  chatLog, chatModel, chatQueue, chatQueueList, chatSend, chatSendMode, chatStop,
 } from './dom.js';
 import {
   chat, commentQueue, notifyQueueChange, onQueueChange,
@@ -33,7 +32,6 @@ import { showToast } from './feedback.js';
 /* ---------- Elementos ---------- */
 
 const input = /** @type {HTMLTextAreaElement} */ (chatInput);
-const keyInput = /** @type {HTMLInputElement} */ (chatKeyInput);
 const modelSelect = /** @type {HTMLSelectElement} */ (chatModel);
 const effortSelect = /** @type {HTMLSelectElement} */ (chatEffort);
 const sendMode = chatSendMode;
@@ -476,51 +474,6 @@ export function setSessionId(sessionId) {
 }
 
 /**
- * Recalcula a visibilidade do campo de chave e do botao Salvar a partir das
- * tres fontes que decidem isso — nunca setadas direto nos setters, para as
- * tres nao ficarem dessincronizadas entre si:
- * - `hasKey`: com chave gravada, nao ha nada para decidir; campo some.
- * - `hasAmbientCredential`: com sessao detectada e sem chave, o campo comeca
- *   escondido — a conversa ja funciona sem ele.
- * - `keyFieldRevealed`: o usuario pediu para ver o campo mesmo tendo sessao
- *   (clicou no aviso), para trocar a sessao por credito de API.
- */
-function updateKeyFieldVisibility() {
-  const visible = !chat.hasKey && (!chat.hasAmbientCredential || chat.keyFieldRevealed);
-  chatKeyInput.hidden = !visible;
-  chatKeySave.hidden = !visible;
-}
-
-/**
- * Ha chave gravada no servidor? Com chave, o painel de configuracao sai do
- * caminho da conversa — nao ha nada para o usuario decidir ali.
- * @param {boolean} hasKey
- */
-export function setHasKey(hasKey) {
-  chat.hasKey = hasKey;
-  chatSettings.hidden = hasKey;
-  updateKeyFieldVisibility();
-}
-
-/**
- * Ha sessao do Claude Code no ambiente do servidor (`claude login`, plano
- * Pro/Max)? Quando ha, a conversa ja funciona sem chave nenhuma: o campo de
- * chave comeca escondido (veja `updateKeyFieldVisibility`) e o aviso, no
- * lugar dele, diz que a sessao ja basta e serve de controle para revelar o
- * campo (veja `revealKeyField` em `bindComposerEvents`).
- * @param {boolean} hasAmbientCredential
- */
-export function setHasAmbientCredential(hasAmbientCredential) {
-  chat.hasAmbientCredential = hasAmbientCredential;
-  if (!hasAmbientCredential) chat.keyFieldRevealed = false;
-  chatCredentialNote.hidden = !hasAmbientCredential;
-  chatCredentialNote.textContent = hasAmbientCredential
-    ? 'Sessao do Claude Code detectada — a conversa ja funciona com o seu plano, sem colar chave.'
-    : '';
-  updateKeyFieldVisibility();
-}
-
-/**
  * Aprovacao automatica das edicoes.
  * @param {boolean} enabled
  */
@@ -862,33 +815,6 @@ function bindComposer() {
   effortSelect.addEventListener('change', () => updatePrefs({ effort: effortSelect.value }));
 }
 
-function bindSettings() {
-  chatKeySave.addEventListener('click', () => {
-    const value = keyInput.value.trim();
-    if (!value) {
-      showToast('Cole a chave antes de salvar.');
-      return;
-    }
-
-    const saveKey = chat.transport?.saveKey;
-    if (!saveKey) {
-      showToast('A conversa ainda nao esta ligada ao servidor.');
-      return;
-    }
-
-    saveKey(value);
-    keyInput.value = '';
-  });
-
-  // So revela quando o campo esta de fato escondido por sessao (nao faz nada
-  // se ja esta visivel, ou se nao ha sessao — o clique nao muda o aviso em si).
-  chatCredentialNote.addEventListener('click', () => {
-    if (!chat.hasAmbientCredential || chat.hasKey) return;
-    chat.keyFieldRevealed = true;
-    updateKeyFieldVisibility();
-  });
-}
-
 /**
  * Monta o painel: preferencias nos seletores, rascunho de volta no compositor e
  * os listeners. Chamada uma vez por `board.js`, depois da carga — o rascunho e
@@ -905,13 +831,10 @@ export function initChat() {
   setSendOnEnter(prefs.sendOnEnter);
   setAutoApprove(chat.autoApprove);
   setTurnRunning(false);
-  setHasKey(chat.hasKey);
-  setHasAmbientCredential(chat.hasAmbientCredential);
 
   input.value = loadChatDraft();
   resetUndo();
   autoGrow();
 
   bindComposer();
-  bindSettings();
 }

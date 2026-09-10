@@ -11,9 +11,10 @@
 
 import {
   appendChatError, appendAssistantDelta, appendPermissionRequest, appendThinkingDelta,
-  appendToolUse, applyServerConfig, setAutoApprove, setHasAmbientCredential, setHasKey, setSessionId,
+  appendToolUse, applyServerConfig, setAutoApprove, setSessionId,
   setTransport, setTurnRunning, updateToolResult,
 } from './chat.js';
+import { setHasAmbientCredential, setHasKey } from './settings.js';
 import { chat } from './state.js';
 
 /** Rotas da conversa. O servidor so aceita `POST` embaixo deste prefixo. */
