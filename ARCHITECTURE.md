@@ -658,6 +658,64 @@ Limite conhecido: uma tela liberada para interação não pode ser redimensionad
 o escudo sai do caminho para o protótipo receber os cliques, e é ele quem detecta a borda.
 `Esc` devolve o controle ao board e a borda volta a agarrar.
 
+#### Tamanho de todas as telas ao mesmo tempo
+
+A toolbar tem o mesmo menu, aplicado ao board inteiro: as opções saem de
+`PRESET_FRAME_SIZES` — a lista continua vindo de um lugar só — e escolher uma põe **todas**
+as telas naquele tamanho. Ver o protótipo inteiro em mobile é uma das perguntas mais comuns
+sobre um board, e abrir o menu de cada tela para isso era o mesmo gesto repetido *n* vezes.
+O menu de cada card continua valendo por cima depois: o global é um atalho, não uma trava.
+
+A escolha vive em `ui.globalSize` e **não** vai para o `localStorage`. O que ela produz — o
+tamanho de cada tela — já persiste no registro de posições; guardar as duas coisas daria
+duas fontes da verdade para o mesmo número, e a carga teria de decidir qual vence. O
+"Automático" é o próprio `null`, e não um valor sentinela: não é um tamanho, é a ausência
+de tamanho fixo, e assim todo leitor distingue dois casos em vez de três.
+
+Enquanto a escolha vale, ela alcança as telas que **entram depois** — `createCard` a
+consulta em `initialSize`, e ela vence o tamanho salvo de uma sessão anterior por ser a
+escolha mais recente do usuário. Só o tamanho: a posição continua vindo do registro salvo.
+
+`applyGlobalSize` mexe em `pinned` no meio do caminho, e o motivo é um aperto entre duas
+coisas que o gesto precisa entregar. Tela fixa não escorre, então deixar todas fixas durante
+o layout poria as que cresceram em cima das vizinhas; mas `persistPositions` só grava tela
+fixa, então deixar todas soltas faria a recarga devolver o tamanho do conteúdo.
+
+É por isso que existe `autoPinned` ao lado de `pinned`: ele guarda a **procedência**. Uma
+tela com `autoPinned` está fixa só porque um gesto global a fixou, e não porque o usuário a
+colocou ali. Sem essa distinção o segundo gesto global encontrava tudo fixo, o layout não
+tinha o que acomodar, e as telas cresciam umas por cima das outras — todas vermelhas e, por
+tabela, sem gravar o tamanho, já que tela sobreposta não persiste. `autoPinned` não é um
+segundo `pinned`: o significado de `pinned` ("o layout não mexe nesta") continua o mesmo em
+todos os pontos que o leem, e o campo novo só responde de quem foi a decisão. Qualquer gesto
+do usuário sobre a tela — arrastar o título, arrastar a borda, escolher um tamanho no menu
+do card — desliga `autoPinned`; "Reorganizar" desliga em todas.
+
+A ordem do gesto, então: solta o que ele mesmo fixou da vez anterior, aplica o tamanho
+preservando quem é do usuário, deixa o layout acomodar quem escorre, **separa o que ainda
+colide**, e só então fixa tudo onde parou. O que pode colidir depois do layout são duas
+telas que o usuário posicionou e que cresceram uma dentro da outra: `separateCollisions`
+desce a de baixo o mínimo que resolve. Ele mirou aqueles pontos, mas não mirou a colisão —
+e deixá-la de pé custaria também o tamanho das duas. Isso não vale para o arrasto à mão:
+largar uma tela em cima de outra continua sendo posição inválida do usuário, marcada e não
+gravada.
+
+A conta de quem desce é `separateOverlaps`, em `utils.js`, pura e testada em `unit.mjs`.
+Ela só desce, nunca desvia para o lado, pelo mesmo motivo que `belowPinned` também só desce:
+o board é lido em colunas, e uma tela saltando para o lado embaralha mais do que uma
+descendo.
+
+No "Automático" nada disso é preciso: não há tamanho a preservar, então ele só solta o que o
+gesto anterior fixou, remede, reorganiza e grava.
+
+O menu abre para **cima** (`bottom: 100%`), e essa é a única diferença real de estilo contra
+o menu do card: a toolbar mora colada na borda de baixo do viewport, e um menu descendo dali
+sairia da tela.
+
+Limite conhecido, que o controle novo não criou mas torna mais visível: com a sidebar
+esticada perto do máximo o board sobra estreito, a toolbar inteira fica mais larga do que
+ele e transborda por baixo da sidebar. Atinge os botões que já existiam tanto quanto o novo.
+
 #### Escudo sobre o iframe
 
 Um iframe engole scroll e arrasto: sem tratamento, passar o mouse sobre um card mataria o
@@ -968,6 +1026,8 @@ E o que **fica por conta do usuário**, dito sem rodeio:
    | Zoom, pan, posição dos cards | `src/client/view.js` |
    | O que o board lembra entre sessões | `src/client/storage.js` |
    | O que um card mostra ou mede | `src/client/cards.js` |
+   | O tamanho de todas as telas de uma vez | `src/client/cards.js` (`applyGlobalSize`), `src/client/controls.js` (o menu da toolbar) |
+   | Tela sobreposta: marcar ou separar | `src/client/view.js` (`refreshOverlaps`, `separateCollisions`), `src/client/utils.js` (a conta) |
    | Atalho de teclado, botão, gesto | `src/client/controls.js` |
    | Largura da sidebar | `src/client/controls.js` |
    | Destaque de elemento, XPath | `src/client/inspect.js` |

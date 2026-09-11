@@ -8,7 +8,9 @@
 import { canvas, viewport, zoomLabel } from './dom.js';
 import { screens, ui, view } from './state.js';
 import { setCurrent } from './sidebar.js';
-import { assignColumns, clamp, findOverlaps, rectsOverlap, snapToGrid } from './utils.js';
+import {
+  assignColumns, clamp, findOverlaps, rectsOverlap, separateOverlaps, snapToGrid,
+} from './utils.js';
 import { clearPositions, loadPositions, savePositions } from './storage.js';
 import {
   CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, GAP, GRID_SIZE,
@@ -228,6 +230,34 @@ export function refreshOverlaps() {
 }
 
 /**
+ * Desfaz as sobreposicoes que sobraram, descendo quem esta por baixo.
+ *
+ * Usado pelo gesto de tamanho global: depois de o `layout()` acomodar as telas
+ * que escorrem, o que ainda pode colidir sao duas telas que o *usuario* colocou
+ * onde estao e que cresceram uma dentro da outra. Ele mirou aqueles pontos, mas
+ * nao mirou a colisao — deixar as duas vermelhas custaria tambem o tamanho
+ * delas, que `persistPositions` nao grava em tela sobreposta.
+ *
+ * Nao vale para o arrasto a mao: largar uma tela em cima de outra continua sendo
+ * uma posicao invalida do usuario, marcada e nao gravada.
+ *
+ * @returns {boolean} true quando alguma tela precisou descer
+ */
+export function separateCollisions() {
+  const moved = separateOverlaps(
+    [...screens.values()].map((screen) => ({ file: screen.file, ...screenRect(screen) })),
+    GAP,
+  );
+
+  for (const [file, y] of moved) {
+    const screen = screens.get(file);
+    if (screen) place(screen, screen.x, y);
+  }
+  refreshOverlaps();
+  return moved.size > 0;
+}
+
+/**
  * Move uma tela para um ponto do canvas. Mover fixa a tela: dali em diante ela
  * e do usuario, e o layout automatico nao mexe mais nela.
  *
@@ -240,6 +270,9 @@ export function moveScreen(file, x, y) {
   if (!screen) return;
 
   screen.pinned = true;
+  // O usuario mirou este ponto: a tela deixa de ser do gesto global e nao volta
+  // a escorrer no proximo.
+  screen.autoPinned = false;
   if (ui.snapToGrid) {
     x = snapToGrid(x, GRID_SIZE);
     y = snapToGrid(y, GRID_SIZE);
@@ -270,6 +303,9 @@ export function resizeScreen(file, width, height) {
   if (!screen) return;
 
   screen.pinned = true;
+  // Idem `moveScreen`: o tamanho escolhido a mao e do usuario. `applyGlobalSize`
+  // passa por aqui no laco dele e remarca depois o que for dele.
+  screen.autoPinned = false;
   screen.sized = true;
   placeSize(
     screen,
@@ -393,7 +429,10 @@ export function persistPositions() {
 export function resetPositions() {
   clearPositions();
   clearHistory();
-  for (const screen of screens.values()) screen.pinned = false;
+  for (const screen of screens.values()) {
+    screen.pinned = false;
+    screen.autoPinned = false;
+  }
   layout();
 }
 

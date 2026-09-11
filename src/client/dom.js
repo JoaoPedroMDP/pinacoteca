@@ -65,6 +65,8 @@ export const chatKeySave = required('chat-key-save');
 /** A toolbar fica *dentro* do viewport — veja o tratamento no `controls.js`. */
 export const toolbar = /** @type {HTMLElement} */ (document.querySelector('.toolbar'));
 
+export const globalSizeMenu = required('global-size-menu');
+
 /**
  * Cria o elemento uma vez e reaproveita nas chamadas seguintes. Usado pelos
  * avisos flutuantes (toast, tooltip), que so existem depois da primeira vez.

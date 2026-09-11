@@ -28,7 +28,7 @@ import {
 import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
   clampSidebarWidth, previewUrl, rectsOverlap, resizeZoneAt, resolveXPath,
-  serializeCommentQueue, snapToGrid, sortNames,
+  separateOverlaps, serializeCommentQueue, snapToGrid, sortNames,
 } from '../src/client/utils.js';
 
 /* ---------- cli.js ---------- */
@@ -672,6 +672,45 @@ test('findOverlaps devolve conjunto vazio quando esta tudo valido', () => {
     { file: 'a.html', x: 0, y: 0, width: 100, height: 100 },
     { file: 'b.html', x: 172, y: 0, width: 100, height: 100 },
   ]).size, 0);
+});
+
+test('separateOverlaps nao mexe em nada quando ninguem se sobrepoe', () => {
+  assert.equal(separateOverlaps([
+    { file: 'a.html', x: 0, y: 0, width: 100, height: 100 },
+    { file: 'b.html', x: 172, y: 0, width: 100, height: 100 },
+  ], 10).size, 0);
+});
+
+test('separateOverlaps desce a de baixo o bastante para sair de cima da outra', () => {
+  const moved = separateOverlaps([
+    { file: 'a.html', x: 0, y: 0, width: 100, height: 100 },
+    { file: 'b.html', x: 50, y: 50, width: 100, height: 100 },
+  ], 10);
+
+  // A de cima fica: quem desce e so quem estava por baixo.
+  assert.deepEqual([...moved.keys()], ['b.html']);
+  assert.equal(moved.get('b.html'), 110, 'encosta abaixo de a.html com a folga pedida');
+});
+
+test('separateOverlaps resolve uma cascata numa passada so', () => {
+  const moved = separateOverlaps([
+    { file: 'a.html', x: 0, y: 0, width: 100, height: 100 },
+    { file: 'b.html', x: 0, y: 20, width: 100, height: 100 },
+    { file: 'c.html', x: 0, y: 40, width: 100, height: 100 },
+  ], 10);
+
+  assert.equal(moved.get('b.html'), 110);
+  assert.equal(moved.get('c.html'), 220, 'desce abaixo de b.html, e nao de a.html');
+});
+
+test('separateOverlaps nao altera as caixas recebidas', () => {
+  const boxes = [
+    { file: 'a.html', x: 0, y: 0, width: 100, height: 100 },
+    { file: 'b.html', x: 0, y: 50, width: 100, height: 100 },
+  ];
+  separateOverlaps(boxes, 10);
+
+  assert.equal(boxes[1].y, 50);
 });
 
 /* ---------- Bordas que redimensionam ---------- */

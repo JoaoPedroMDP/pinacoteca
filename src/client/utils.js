@@ -106,6 +106,52 @@ export function findOverlaps(boxes) {
 }
 
 /**
+ * Desfaz as sobreposicoes de um conjunto de caixas, descendo quem estiver por
+ * baixo o minimo que resolve.
+ *
+ * So desce, e nunca desvia para o lado, pelo mesmo motivo que `belowPinned`
+ * (em `view.js`) tambem so desce: o board e lido em colunas, e uma tela saltando
+ * para o lado embaralha mais a leitura do que uma descendo. `gap` e a folga
+ * deixada entre as duas depois de separadas, para elas nao ficarem coladas.
+ *
+ * As caixas sao percorridas de cima para baixo, e cada uma so e comparada com as
+ * que ja foram resolvidas: quem desce nunca volta a colidir com quem ficou
+ * acima, entao uma passada basta mesmo com colisoes em cascata.
+ *
+ * Nao toca nas caixas recebidas — devolve so quanto cada uma precisa descer.
+ *
+ * @param {Array<Rect & { file: string }>} boxes
+ * @param {number} gap folga entre duas caixas separadas, em px de canvas
+ * @returns {Map<string, number>} o `y` novo de cada caixa que precisou descer
+ */
+export function separateOverlaps(boxes, gap) {
+  const ordered = [...boxes].sort((a, b) => a.y - b.y || a.x - b.x);
+
+  /** @type {Map<string, number>} */
+  const moved = new Map();
+  /** @type {Rect[]} */
+  const settled = [];
+
+  for (const box of ordered) {
+    let { y } = box;
+    // Repete ate parar de colidir: descer para escapar de uma caixa pode meter a
+    // atual dentro de outra que estava mais abaixo.
+    for (let again = true; again;) {
+      again = false;
+      for (const other of settled) {
+        if (!rectsOverlap({ ...box, y }, other)) continue;
+        y = other.y + other.height + gap;
+        again = true;
+      }
+    }
+
+    if (y !== box.y) moved.set(box.file, y);
+    settled.push({ ...box, y });
+  }
+  return moved;
+}
+
+/**
  * @typedef {'right' | 'bottom' | 'corner'} ResizeZone
  */
 

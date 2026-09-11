@@ -8,7 +8,9 @@
 import { canvas } from './dom.js';
 import { screens, ui } from './state.js';
 import { clamp, previewUrl, resizeZoneAt } from './utils.js';
-import { applyPresetSize, centerOn, layout, persistPositions } from './view.js';
+import {
+  applyPresetSize, centerOn, layout, persistPositions, resizeScreen, separateCollisions,
+} from './view.js';
 import { setCurrent } from './sidebar.js';
 import {
   clearHoverHighlight, copyXPathAt, injectInspectStyle, onInspectMove, tryReanchor,
@@ -214,6 +216,29 @@ function buildTitle(file) {
 }
 
 /**
+ * Com que tamanho uma tela nasce, e se esse tamanho conta como escolha do
+ * usuario (`sized`) — o que impede a medida automatica de desfaze-lo.
+ *
+ * A ordem e: o tamanho global desta sessao, se houver; senao o tamanho salvo;
+ * senao o padrao, que a primeira medida do conteudo logo substitui. O global
+ * vem na frente do salvo por ser a escolha mais recente do usuario, feita
+ * justamente para valer em todas as telas.
+ *
+ * @param {import('./storage.js').Position | null} saved
+ * @returns {{ width: number, height: number, sized: boolean }}
+ */
+function initialSize(saved) {
+  const global = ui.globalSize;
+  if (global) return { width: global.width, height: global.height, sized: true };
+
+  if (saved?.width !== undefined && saved.height !== undefined) {
+    return { width: saved.width, height: saved.height, sized: true };
+  }
+
+  return { width: CARD_WIDTH, height: DEFAULT_FRAME_HEIGHT, sized: false };
+}
+
+/**
  * Monta o card e o item de sidebar de uma tela e registra em `screens`.
  * Quem chama e responsavel por rodar `renderSidebar()` e `layout()` depois.
  *
@@ -269,18 +294,21 @@ export function createCard(file) {
 
   // A tela volta para onde — e do tamanho que — o usuario a deixou da ultima vez.
   const saved = savedPosition(file);
-  const savedSize = saved?.width !== undefined && saved.height !== undefined;
+  const size = initialSize(saved);
 
   /** @type {Screen} */
   const screen = {
     file, card, frame, iframe, item,
     assets: new Set(),
-    frameWidth: saved?.width ?? CARD_WIDTH,
-    frameHeight: saved?.height ?? DEFAULT_FRAME_HEIGHT,
+    frameWidth: size.width,
+    frameHeight: size.height,
     x: saved?.x ?? 0,
     y: saved?.y ?? 0,
     pinned: saved !== null,
-    sized: savedSize,
+    // Posicao salva conta como escolha do usuario: ela so existe porque ele
+    // arrastou ou redimensionou a tela em alguma sessao.
+    autoPinned: false,
+    sized: size.sized,
     pendingScroll: 0,
     lateScan: null,
     reloadsSinceSettle: 0,
@@ -466,6 +494,72 @@ export function autoSizeCard(file) {
  */
 export function resetSizes() {
   for (const screen of screens.values()) measureAgain(screen);
+}
+
+/**
+ * Poe *todas* as telas no mesmo tamanho, e guarda a escolha para as que ainda
+ * vao entrar (veja `ui.globalSize` e `createCard`). E o gesto do menu da
+ * toolbar; o menu de cada card continua valendo por cima depois.
+ *
+ * Passar `null` e o "Automatico": devolve todas ao tamanho do proprio conteudo
+ * e larga a escolha global, entao tela nova volta a ser medida pelo conteudo.
+ *
+ * O laco chama `resizeScreen` — e nao `applyPresetSize` — de proposito: este ja
+ * embute o fechamento do gesto, e o board inteiro seria reorganizado e regravado
+ * uma vez por tela. Aqui o `layout()` e o `persistPositions()` ficam por fora,
+ * uma vez so no fim.
+ *
+ * A dança com `pinned` no meio resolve um aperto entre duas coisas que o gesto
+ * precisa entregar. Tela fixa nao escorre, entao deixar todas fixas durante o
+ * layout poria as que cresceram em cima das vizinhas; mas `persistPositions` so
+ * grava tela fixa, entao deixar todas soltas faria a recarga devolver o tamanho
+ * do conteudo. Dai a ordem abaixo, e dai `autoPinned`: sem separar quem o
+ * usuario fixou de quem o gesto anterior fixou, o segundo gesto encontraria tudo
+ * fixo e o layout nao teria o que acomodar.
+ *
+ * @param {{ label: string, width: number, height: number } | null} preset
+ */
+export function applyGlobalSize(preset) {
+  ui.globalSize = preset;
+
+  // Quem esta onde esta por vontade do usuario. Lido antes de qualquer coisa: o
+  // laco abaixo passa por `resizeScreen`, que limpa `autoPinned`.
+  const userPlaced = new Set(
+    [...screens.values()].filter((screen) => screen.pinned && !screen.autoPinned)
+      .map((screen) => screen.file),
+  );
+
+  // O que o gesto anterior fixou volta a escorrer, para o layout poder acomodar.
+  for (const screen of screens.values()) {
+    if (!userPlaced.has(screen.file)) screen.pinned = false;
+  }
+
+  if (preset) {
+    for (const screen of screens.values()) {
+      resizeScreen(screen.file, preset.width, preset.height);
+      screen.pinned = userPlaced.has(screen.file);
+    }
+  } else {
+    // No "Automatico" nao ha tamanho a preservar — a tela volta a ser medida
+    // pelo conteudo na recarga de qualquer jeito — entao fixar tudo no fim so
+    // congelaria o board sem ganho nenhum.
+    resetSizes();
+  }
+
+  layout();
+
+  if (preset) {
+    // Sobrou o que o layout nao move: duas telas do usuario que cresceram uma
+    // dentro da outra. Depois do layout de proposito — separar antes seria
+    // contra posicoes que ainda iam mudar.
+    separateCollisions();
+    for (const screen of screens.values()) {
+      screen.pinned = true;
+      screen.autoPinned = !userPlaced.has(screen.file);
+    }
+  }
+
+  persistPositions();
 }
 
 /**

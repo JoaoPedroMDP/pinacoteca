@@ -4,20 +4,20 @@
 // Todos os listeners do board estao aqui. Cada um comeca decidindo *de quem e o
 // gesto* — do prototipo, do modo ponteiro ou do board — e so entao age.
 
-import { sidebarResizer, toolbar, viewport } from './dom.js';
+import { globalSizeMenu, sidebarResizer, toolbar, viewport } from './dom.js';
 import { screens, ui, view } from './state.js';
 import {
   applyTransform, finishResize, fitToScreen, moveScreen, panBy, persistPositions,
   recordMove, redo, resetPositions, resetZoom, resizeScreen, undo, zoomAt, zoomByStep,
 } from './view.js';
-import { closeSizeMenu, resetSizes, setInteractive } from './cards.js';
+import { applyGlobalSize, closeSizeMenu, resetSizes, setInteractive } from './cards.js';
 import {
   adjustInspectLevel, clearHoverHighlight, hasHoverTarget, openCommentBoxAt,
 } from './inspect.js';
 import { saveSidebarWidth, saveSnapToGrid } from './storage.js';
 import { clamp, clampSidebarWidth, resizeZoneAt } from './utils.js';
 import {
-  PAN_DRAG_THRESHOLD, RESIZE_CURSORS, RESIZE_EDGE_PX,
+  PAN_DRAG_THRESHOLD, PRESET_FRAME_SIZES, RESIZE_CURSORS, RESIZE_EDGE_PX,
   SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_CANVAS, SIDEBAR_MIN_WIDTH,
   WHEEL_STEP, WHEEL_ZOOM_DAMPING, ZOOM_STEP,
 } from './constants.js';
@@ -416,9 +416,56 @@ viewport.addEventListener('click', (event) => {
   if (ui.openSizeMenuFile && !target?.closest?.('.card-resize-btn, .card-size-menu')) {
     closeSizeMenu();
   }
+  // O menu global mora na toolbar, que fica dentro do viewport: o clique nele
+  // chega aqui tambem, e sem esta guarda o proprio gesto de abrir fecharia.
+  if (ui.globalSizeMenuOpen && !target?.closest?.('.global-size')) closeGlobalSizeMenu();
 });
 
 /* ---------- Toolbar ---------- */
+
+/* Menu de tamanho global. As opcoes saem de `PRESET_FRAME_SIZES`, a mesma lista
+   que o menu de cada card monta: os tamanhos continuam vindo de um lugar so. */
+
+/** Fecha o menu de tamanho global, se estiver aberto. */
+function closeGlobalSizeMenu() {
+  if (!ui.globalSizeMenuOpen) return;
+
+  ui.globalSizeMenuOpen = false;
+  globalSizeMenu.classList.remove('is-open');
+  toolbar.querySelector('[data-action="global-size"]')?.setAttribute('aria-expanded', 'false');
+}
+
+/** Abre o menu global, ou fecha o que ja estava aberto. */
+function toggleGlobalSizeMenu() {
+  if (ui.globalSizeMenuOpen) {
+    closeGlobalSizeMenu();
+    return;
+  }
+
+  ui.globalSizeMenuOpen = true;
+  globalSizeMenu.classList.add('is-open');
+  toolbar.querySelector('[data-action="global-size"]')?.setAttribute('aria-expanded', 'true');
+}
+
+/**
+ * Monta uma opcao do menu global. `preset` nulo e o "Automatico".
+ * @param {{ label: string, width: number, height: number } | null} preset
+ */
+function buildGlobalSizeOption(preset) {
+  const option = document.createElement('button');
+  option.type = 'button';
+  option.className = 'card-size-option';
+  option.dataset.size = preset ? `${preset.width}x${preset.height}` : 'auto';
+  option.textContent = preset ? `${preset.label} ${preset.width}×${preset.height}` : 'Automatico';
+  option.addEventListener('click', () => {
+    applyGlobalSize(preset);
+    closeGlobalSizeMenu();
+  });
+  globalSizeMenu.append(option);
+}
+
+buildGlobalSizeOption(null);
+for (const preset of PRESET_FRAME_SIZES) buildGlobalSizeOption(preset);
 
 toolbar.addEventListener('click', (event) => {
   const action = /** @type {Element} */ (event.target).closest('button')?.getAttribute('data-action');
@@ -431,6 +478,11 @@ toolbar.addEventListener('click', (event) => {
   else if (action === 'rearrange') { resetSizes(); resetPositions(); }
   else if (action === 'toggle-mode') setMode(ui.mode === 'pointer' ? 'pan' : 'pointer');
   else if (action === 'toggle-snap') setSnapToGrid(!ui.snapToGrid);
+  else if (action === 'global-size') toggleGlobalSizeMenu();
+
+  // Qualquer outro botao da toolbar fecha o menu global: ele e um popover, e
+  // deixar aberto por cima de um gesto de zoom ou de enquadrar so atrapalha.
+  if (action && action !== 'global-size') closeGlobalSizeMenu();
 });
 
 /* ---------- Teclado ---------- */

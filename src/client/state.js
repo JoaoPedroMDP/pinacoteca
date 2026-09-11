@@ -22,6 +22,13 @@
  * @property {number} y posicao no canvas, definida pelo layout ou pelo arrasto
  * @property {boolean} pinned true quando a posicao veio do usuario (arrasto ou
  *   localStorage). Tela fixa nao e movida pelo layout automatico.
+ * @property {boolean} autoPinned true quando a tela esta fixa *apenas* porque um
+ *   gesto de tamanho global a fixou, e nao porque o usuario a colocou onde esta.
+ *   E a procedencia do `pinned`, e nao um segundo `pinned`: sem ela, o segundo
+ *   gesto global encontraria tudo fixo, o layout nao moveria nada e as telas
+ *   cresceriam umas por cima das outras. Qualquer gesto do usuario sobre a tela
+ *   — arrastar o titulo, arrastar a borda, escolher um tamanho no menu do card —
+ *   desliga: dali em diante a tela e dele.
  * @property {boolean} sized true quando o *tamanho* veio do usuario (arrasto de
  *   borda, preset ou localStorage). E para o tamanho o que `pinned` e para a
  *   posicao: enquanto vale, `resizeToContent` nao remede a tela, senao a
@@ -68,6 +75,15 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   (duplo clique libera; `Esc` ou clique fora devolve o controle ao board).
  * - `openSizeMenuFile`: a unica tela com o menu de tamanho aberto. Um por vez,
  *   pelo mesmo motivo de `interactiveFile`.
+ * - `globalSize`: o tamanho escolhido no menu da toolbar, que vale para *todas*
+ *   as telas — inclusive as que entrarem depois, veja `createCard`. `null` e o
+ *   "Automatico": nao e um tamanho, e a ausencia de tamanho fixo, entao guardar
+ *   um valor sentinela so obrigaria todo leitor a distinguir tres casos onde
+ *   dois bastam. Nao vai para o `localStorage` de proposito: a escolha morre com
+ *   a sessao, e o que ela produziu — o tamanho de cada tela — ja persiste no
+ *   registro de posicoes.
+ * - `globalSizeMenuOpen`: o menu da toolbar esta aberto. Separado de
+ *   `openSizeMenuFile` porque nao e de tela nenhuma.
  * - `snapToGrid`: liga o alinhamento a grade no arrasto de tela. Carregado do
  *   localStorage por `board.js` na carga inicial (`state.js` nao importa
  *   `storage.js` — a dependencia so anda numa direcao).
@@ -81,6 +97,8 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   mode: 'pan' | 'pointer',
  *   interactiveFile: string | null,
  *   openSizeMenuFile: string | null,
+ *   globalSize: { label: string, width: number, height: number } | null,
+ *   globalSizeMenuOpen: boolean,
  *   snapToGrid: boolean,
  *   lastChangedFiles: string[],
  *   activeTab: 'screens' | 'chat',
@@ -91,6 +109,8 @@ export const ui = {
   mode: 'pan',
   interactiveFile: null,
   openSizeMenuFile: null,
+  globalSize: null,
+  globalSizeMenuOpen: false,
   snapToGrid: false,
   lastChangedFiles: [],
   activeTab: 'screens',

@@ -907,6 +907,45 @@ body {
   background: var(--border);
 }
 
+/* Ancora do menu global: o menu se posiciona contra ela, nao contra a toolbar
+   inteira, senao abriria centralizado na barra em vez de sob o proprio botao. */
+.global-size {
+  position: relative;
+  display: flex;
+}
+
+/* Mesmo popover do menu de tamanho de um card (`.card-size-menu`), so que para
+   cima: a toolbar mora colada na borda de baixo do viewport, e um menu descendo
+   dali sairia da tela. */
+.global-size-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 5;
+  display: none;
+  min-width: 150px;
+  margin-bottom: 6px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgb(27 30 36 / 96%);
+  backdrop-filter: blur(6px);
+}
+
+.global-size-menu.is-open {
+  display: flex;
+  flex-direction: column;
+}
+
+/* As opcoes sao as mesmas do menu de card e herdam `.card-size-option`. Estas
+   linhas existem so para desfazer a forma de botao de toolbar (`.toolbar
+   button`, mais especifica), que as deixaria com altura fixa e centralizadas. */
+.global-size-menu .card-size-option {
+  min-width: 0;
+  height: auto;
+  padding: 6px 8px;
+}
+
 .hint {
   position: absolute;
   right: 16px;

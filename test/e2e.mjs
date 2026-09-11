@@ -1229,6 +1229,208 @@ await board.evaluate("document.querySelector('[data-action=\"toggle-mode\"]').cl
 await board.evaluate("import('/app/chat.js').then((m) => m.setTransport(null))");
 await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
 
+/* ---------- Tamanho global ---------- */
+
+// Fica por ultimo entre os testes de board de proposito: o bloco recarrega a
+// pagina para conferir o que sobrevive a sessao, e uma recarga no meio zeraria o
+// estado de que os testes seguintes dependem.
+
+process.stdout.write('\nTamanho global\n');
+
+// Os testes acima deixaram telas fixas e arrastadas; aqui o que se mede e o
+// efeito do gesto global, entao o board volta ao layout automatico primeiro.
+await board.evaluate("document.querySelector('[data-action=\"rearrange\"]').click()");
+
+// E deixaram a sidebar esticada perto do maximo. Com ela assim o board sobra
+// estreito, a toolbar inteira fica mais larga do que ele e transborda por baixo
+// da sidebar — o que atinge os botoes que ja existiam tanto quanto o novo.
+// Medir o encaixe do menu ali seria medir esse aperto, e nao o gesto.
+await board.evaluate("import('/app/controls.js').then((m) => m.setSidebarWidth(240))");
+
+const toggleGlobalMenu = () => board.evaluate(
+  "document.querySelector('[data-action=\"global-size\"]').click()");
+const globalMenuOpen = () => board.evaluate(
+  "document.getElementById('global-size-menu').classList.contains('is-open')");
+/** @type {(size: string) => Promise<unknown>} */
+const chooseGlobalSize = (size) => board.evaluate(
+  `document.querySelector('#global-size-menu .card-size-option[data-size="${size}"]').click()`);
+
+/**
+ * Tamanho de *todas* as telas do board — as asercoes daqui sao em massa.
+ * @type {() => Promise<Array<{ file: string, width: number, height: number }>>}
+ */
+const allSizes = async () => JSON.parse(await board.evaluate(`JSON.stringify(
+  [...document.querySelectorAll('.card')].map((card) => ({
+    file: card.dataset.file,
+    width: Number.parseFloat(card.style.width),
+    height: Number.parseFloat(card.querySelector('.card-frame').style.height),
+  }))
+)`));
+
+/** @type {(sizes: Array<{ width: number, height: number }>, w: number, h: number) => boolean} */
+const allAt = (sizes, w, h) => sizes.length > 1 && sizes.every((s) => s.width === w && s.height === h);
+
+await toggleGlobalMenu();
+check('botao da toolbar abre o menu global', (await globalMenuOpen()) === true);
+
+check('menu global lista Automatico e os quatro presets',
+  (await board.evaluate("document.querySelectorAll('#global-size-menu .card-size-option').length")) === 5);
+
+// A toolbar mora colada na borda de baixo: o menu tem de subir, e o ponto do
+// meio dele precisa ser dele mesmo — senao as opcoes nao recebem clique.
+const globalMenuPlacement = await board.evaluate(`(() => {
+  const menu = document.getElementById('global-size-menu');
+  const box = menu.getBoundingClientRect();
+  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+  return {
+    aboveToolbar: box.bottom <= document.querySelector('.toolbar').getBoundingClientRect().top,
+    clickable: Boolean(hit?.closest('#global-size-menu')),
+    hit: hit ? hit.tagName + '.' + hit.className : null,
+    box: { left: box.left, top: box.top, width: box.width, height: box.height },
+  };
+})()`);
+check('menu global abre acima da toolbar', globalMenuPlacement.aboveToolbar === true);
+check('menu global recebe o clique nas opcoes', globalMenuPlacement.clickable === true,
+  JSON.stringify(globalMenuPlacement));
+
+await toggleGlobalMenu();
+check('ativar o botao de novo fecha o menu global', (await globalMenuOpen()) === false);
+
+await toggleGlobalMenu();
+await board.evaluate("document.getElementById('viewport').click()");
+check('clique fora fecha o menu global', (await globalMenuOpen()) === false);
+
+// Uma tela esticada a mao antes do gesto: o preset global tem de alcancar ela
+// tambem, e nao so as que estavam no tamanho do conteudo.
+await board.evaluate(dragFrameEdge('solo.html', 'right', '120', '0'));
+
+await toggleGlobalMenu();
+await chooseGlobalSize('375x667');
+check('menu global fecha depois de escolher', (await globalMenuOpen()) === false);
+
+const mobileAll = await allSizes();
+check('preset global leva todas as telas ao mesmo tamanho', allAt(mobileAll, 375, 667),
+  JSON.stringify(mobileAll));
+check('nenhuma tela fica sobreposta depois do gesto global',
+  (await board.evaluate("document.querySelectorAll('.card.is-invalid').length")) === 0);
+
+const storedGlobal = await stored();
+check('o preset global vai para o localStorage em todas as telas',
+  mobileAll.every((s) => storedGlobal?.[s.file]?.width === 375 && storedGlobal[s.file]?.height === 667),
+  JSON.stringify(storedGlobal));
+
+await toggleGlobalMenu();
+await chooseGlobalSize('1920x1080');
+check('trocar de preset global redimensiona tudo de novo', allAt(await allSizes(), 1920, 1080));
+
+// O segundo gesto e o que quebrava: o primeiro fixava todas as telas, entao o
+// layout nao tinha mais o que acomodar e elas cresciam umas por cima das outras
+// — vermelhas, e sem gravar o tamanho, porque tela sobreposta nao persiste.
+check('trocar de preset global nao sobrepoe nada',
+  (await board.evaluate("document.querySelectorAll('.card.is-invalid').length")) === 0);
+
+const storedSecond = await stored();
+check('o segundo preset global tambem vai para o localStorage',
+  (await allSizes()).every((s) => storedSecond?.[s.file]?.width === 1920
+    && storedSecond[s.file]?.height === 1080),
+  JSON.stringify(storedSecond));
+
+// O global e um atalho, nao uma trava: o menu de cada card continua valendo.
+await board.evaluate("document.querySelector('.card[data-file=\"solo.html\"] .card-resize-btn').click()");
+await board.evaluate(
+  "document.querySelector('.card[data-file=\"solo.html\"] .card-size-option[data-size=\"768x1024\"]').click()");
+
+const afterOverride = await allSizes();
+check('menu de card vale por cima do global naquela tela',
+  afterOverride.find((s) => s.file === 'solo.html')?.width === 768);
+check('o ajuste de uma tela nao arrasta as outras',
+  afterOverride.filter((s) => s.file !== 'solo.html').every((s) => s.width === 1920),
+  JSON.stringify(afterOverride));
+
+// O arranjo manual atravessa os gestos globais: ser fixada por um gesto global
+// nao conta como o usuario ter escolhido aquele ponto, mas arrastar conta.
+await board.evaluate(dragTitle('login.html', 'box.width * 3', 'box.height'));
+const draggedTo = await board.evaluate(cardLeft('login.html'));
+
+await toggleGlobalMenu();
+await chooseGlobalSize('375x667');
+await toggleGlobalMenu();
+await chooseGlobalSize('1920x1080');
+
+check('dois gestos globais seguidos preservam o arrasto do usuario',
+  (await board.evaluate(cardLeft('login.html'))) === draggedTo,
+  `${draggedTo} -> ${await board.evaluate(cardLeft('login.html'))}`);
+
+// Duas telas que o usuario encostou uma perto da outra enquanto estavam
+// estreitas, e que so colidem depois de crescer: ele mirou os pontos, mas nao
+// mirou a colisao.
+await toggleGlobalMenu();
+await chooseGlobalSize('375x667');
+
+await board.evaluate(dragTitle('dashboard.html', '0', '0'));
+await board.evaluate(dragTitle('solo.html',
+  "other('dashboard.html').left - box.left + 500",
+  "other('dashboard.html').top - box.top"));
+check('lado a lado em mobile as duas ainda sao validas',
+  (await board.evaluate("document.querySelectorAll('.card.is-invalid').length")) === 0);
+
+await toggleGlobalMenu();
+await chooseGlobalSize('1920x1080');
+check('telas arrastadas que colidiriam ao crescer sao separadas',
+  (await board.evaluate("document.querySelectorAll('.card.is-invalid').length")) === 0);
+
+fixture.write('global-novo.html', '<!doctype html><meta charset=utf-8><h1>Novo sob o global</h1>');
+await checkEventually('tela que aparece depois nasce no tamanho global', async () => {
+  const novo = (await allSizes()).find((s) => s.file === 'global-novo.html');
+  return novo?.width === 1920 && novo.height === 1080;
+});
+
+await toggleGlobalMenu();
+await chooseGlobalSize('auto');
+await checkEventually('Automatico global devolve todas ao tamanho do conteudo', async () => {
+  const sizes = await allSizes();
+  // A medida do conteudo nunca passa da viewport de referencia (`CARD_WIDTH`),
+  // entao nenhuma tela pode ter sobrado no preset de 1920 — nem a que tinha sido
+  // ajustada sozinha, em 768.
+  return sizes.length > 1 && sizes.every((s) => s.width <= 1280);
+});
+
+fixture.write('global-auto-novo.html', '<!doctype html><meta charset=utf-8><h1>Novo sob o automatico</h1>');
+await checkEventually('com Automatico ativo a tela nova e medida pelo conteudo', async () => {
+  const novo = (await allSizes()).find((s) => s.file === 'global-auto-novo.html');
+  return novo !== undefined && novo.width <= 1280;
+});
+
+// A escolha global e da sessao. O que ela produziu — o tamanho de cada tela —
+// persiste; a escolha em si, nao.
+await toggleGlobalMenu();
+await chooseGlobalSize('375x667');
+check('preset global reaplicado antes da recarga', allAt(await allSizes(), 375, 667));
+
+// O `setTimeout` deixa o `Runtime.evaluate` responder antes de a navegacao
+// destruir o contexto; recarregar direto perderia a resposta.
+await board.evaluate('setTimeout(() => location.reload(), 0)');
+
+await checkEventually('telas reaparecem no tamanho aplicado depois da recarga',
+  async () => allAt(await allSizes(), 375, 667));
+
+fixture.write('pos-recarga.html', '<!doctype html><meta charset=utf-8><h1>Depois da recarga</h1>');
+await checkEventually('depois da recarga a escolha global nao vale para tela nova', async () => {
+  const novo = (await allSizes()).find((s) => s.file === 'pos-recarga.html');
+  return novo !== undefined && novo.width !== 375;
+});
+
+// "Reorganizar" limpa tambem o que o gesto global fixou — senao o board ficaria
+// manual para sempre depois do primeiro preset.
+await board.evaluate("document.querySelector('[data-action=\"rearrange\"]').click()");
+check('Reorganizar depois de um preset global apaga a organizacao salva',
+  (await stored()) === null);
+await checkEventually('Reorganizar depois de um preset global devolve o tamanho do conteudo',
+  async () => {
+    const sizes = await allSizes();
+    return sizes.length > 1 && sizes.every((s) => s.width <= 1280);
+  });
+
 /* ---------- Servidor ---------- */
 
 process.stdout.write('\nServidor\n');
