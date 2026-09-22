@@ -1,3 +1,11 @@
+## 0.13.0 (2026-09-22)
+
+### Feat
+
+- Suporte a perguntas do modelo, fix nas boxes de mensagem e ordenação de mensagens do agente
+- Mudança de responsividade global
+- Modal de configurações
+
 ## 0.12.0 (2026-09-09)
 
 ### Feat
