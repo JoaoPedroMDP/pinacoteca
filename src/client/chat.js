@@ -26,7 +26,7 @@ import {
   loadChatDraft, loadChatHistory, loadChatPrefs, pushChatHistory, saveChatDraft,
   saveChatPrefs,
 } from './storage.js';
-import { serializeCommentQueue } from './utils.js';
+import { normalizeQuestions, serializeCommentQueue } from './utils.js';
 import { showToast } from './feedback.js';
 
 /* ---------- Elementos ---------- */
@@ -221,8 +221,24 @@ function makeBlock(className, text = '') {
   return node;
 }
 
-/** @param {HTMLElement} node */
+/**
+ * Poe um bloco no fim do log.
+ *
+ * **Todo bloco novo fecha os blocos abertos do turno.** Sem isso a bolha do
+ * assistente continuava aberta depois de um bloco de ferramenta, e o texto que
+ * chegasse em seguida voltava a crescer *acima* do Edit/Bash que ja tinha
+ * entrado — o log deixava de contar a historia na ordem em que ela aconteceu.
+ * Fechar aqui, num lugar so, faz valer para bolha, raciocinio, ferramenta,
+ * permissao, pergunta e erro sem cada um ter de lembrar. Quem abre um bloco
+ * (`beginAssistantMessage`, `beginThinking`) registra o seu *depois* de chamar
+ * esta funcao, entao o proprio bloco novo nao se fecha.
+ *
+ * @param {HTMLElement} node
+ */
 function appendBlock(node) {
+  chat.streaming = null;
+  chat.thinking = null;
+
   keepPinned(() => {
     chatEmpty.hidden = true;
     chatLog.append(node);
@@ -436,6 +452,193 @@ export function appendPermissionRequest({ requestId, toolName, input: toolInput,
   if (chat.autoApprove) resolvePermission(requestId, true);
 }
 
+/* ---------- Perguntas do agente ---------- */
+//
+// As vezes o agente nao quer escrever nada: ele quer *saber* de qual jeito
+// seguir. Essa pergunta chega pelo evento `question` e para o turno do lado do
+// servidor ate alguem responder — por isso ela vira um bloco com as opcoes
+// clicaveis, e nao um texto solto que o usuario nao teria como responder.
+//
+// A resposta de cada pergunta e uma string, chaveada pelo enunciado: e o
+// formato que a tool espera de volta (veja `answeredInput`, em `agent.js`).
+// Opcao escolhida vira o rotulo dela; o campo livre vence a escolha, porque
+// escrever ali e a acao mais recente do usuario.
+//
+// Uma chamada pode trazer ate quatro perguntas, e elas sao um bloco so: cada
+// uma vira um item com os campos dela, e o Responder manda todas de uma vez.
+// Sao um turno so do outro lado — mandar uma de cada vez destravaria o
+// `canUseTool` antes de as outras terem resposta.
+//
+// O "x" cancela o bloco inteiro pelo mesmo motivo: e um pedido so. Ele nao e
+// uma resposta vazia, e sim uma recusa (`allow: false`), e a tool volta ao
+// modelo negada — que e como se diz "siga sem isto" em vez de "escolhi nada".
+
+/**
+ * Desenha as opcoes de uma pergunta e devolve como ler a resposta dela.
+ *
+ * `multiSelect` muda so o que um clique faz: numa pergunta de escolha unica ele
+ * desmarca as irmas, numa de varias ele alterna a propria.
+ *
+ * @param {import('./utils.js').Question} question
+ * @param {HTMLElement} item o bloco daquela pergunta, onde os campos entram
+ * @returns {() => string} a resposta escrita agora
+ */
+function buildQuestionFields(question, item) {
+  const options = makeBlock('chat-question-options');
+  /** @type {HTMLButtonElement[]} */
+  const buttons = [];
+
+  const other = document.createElement('input');
+  other.type = 'text';
+  other.className = 'chat-question-other';
+  other.placeholder = 'Outra resposta...';
+  // Escrever aqui e a escolha mais recente: as opcoes marcadas saem do caminho
+  // em vez de disputar a resposta com o texto. E vale o contrario: clicar numa
+  // opcao limpa o campo livre.
+  other.addEventListener('input', () => {
+    if (other.value === '') return;
+    for (const button of buttons) button.setAttribute('aria-pressed', 'false');
+  });
+
+  for (const option of question.options) {
+    const button = makeButton('', 'chat-question-option');
+    button.append(makeBlock('chat-question-option-label', option.label));
+    if (option.description) {
+      button.append(makeBlock('chat-question-option-description', option.description));
+    }
+    button.setAttribute('aria-pressed', 'false');
+    button.addEventListener('click', () => {
+      const selected = button.getAttribute('aria-pressed') === 'true';
+      if (!question.multiSelect) {
+        for (const sibling of buttons) sibling.setAttribute('aria-pressed', 'false');
+      }
+      button.setAttribute('aria-pressed', String(!selected));
+      other.value = '';
+    });
+    buttons.push(button);
+    options.append(button);
+  }
+
+  if (question.options.length > 0) item.append(options);
+  item.append(other);
+
+  return () => {
+    const free = other.value.trim();
+    if (free) return free;
+    return buttons
+      .filter((button) => button.getAttribute('aria-pressed') === 'true')
+      .map((button) => button.querySelector('.chat-question-option-label')?.textContent ?? '')
+      .filter(Boolean)
+      .join(', ');
+  };
+}
+
+/**
+ * Fecha o bloco de uma pergunta: os campos travam e o veredito fica escrito.
+ * Pergunta desconhecida (ja respondida, ou de um turno que saiu da tela) e
+ * ignorada — a resposta so pode ser dada uma vez.
+ *
+ * @param {string} requestId
+ * @param {string} verdict o que escrever no rodape do bloco
+ */
+function closeQuestion(requestId, verdict) {
+  const block = chat.questions.get(requestId);
+  if (!block) return;
+  chat.questions.delete(requestId);
+
+  block.classList.add('is-answered');
+  for (const field of block.querySelectorAll('button, input')) {
+    /** @type {HTMLButtonElement | HTMLInputElement} */ (field).disabled = true;
+  }
+  block.append(makeBlock('chat-question-verdict', verdict));
+}
+
+/**
+ * O que ficou escrito no rodape depois de responder. Com mais de uma pergunta
+ * o rotulo sozinho nao diz nada — `Lista · Escuro` nao lembra qual foi qual —,
+ * entao cada linha leva o enunciado (ou o chip, quando ele existe) junto.
+ *
+ * @param {Array<{ question: string, header: string }>} fields
+ * @param {Record<string, string>} answers
+ * @returns {string}
+ */
+function describeAnswers(fields, answers) {
+  const lines = fields
+    .filter((field) => answers[field.question])
+    .map((field) => `${field.header || field.question}: ${answers[field.question]}`);
+
+  return lines.join('\n') || 'sem resposta';
+}
+
+/**
+ * Pergunta do agente: enunciado, opcoes e um campo de resposta livre por
+ * pergunta, mais um botao que manda todas de uma vez e um "x" que cancela o
+ * bloco inteiro.
+ *
+ * Uma chamada traz ate quatro perguntas e elas viram um bloco so — sao um
+ * pedido so do outro lado (veja o cabecalho desta secao).
+ *
+ * Pergunta sem enunciado nao chega a ser desenhada (`normalizeQuestions`); um
+ * evento em que nenhuma sobrou vira um bloco de erro, porque o turno do outro
+ * lado esta parado esperando e o usuario precisa saber disso.
+ *
+ * @param {{ requestId: string, questions: unknown }} request
+ */
+export function appendQuestionRequest({ requestId, questions: raw }) {
+  const questions = normalizeQuestions(raw);
+  if (questions.length === 0) {
+    appendChatError('O agente fez uma pergunta que este board nao soube desenhar.');
+    chat.transport?.respondToQuestion?.(requestId, { allow: false, answers: {} });
+    return;
+  }
+
+  const block = makeBlock('chat-question');
+
+  // O "x" e o primeiro filho para ficar no canto de cima sem depender da ordem
+  // de nenhuma pergunta — o bloco reserva a faixa dele no proprio padding.
+  const cancel = makeButton('×', 'chat-question-cancel');
+  cancel.title = 'Cancelar a pergunta';
+  cancel.addEventListener('click', () => {
+    closeQuestion(requestId, 'cancelada');
+    chat.transport?.respondToQuestion?.(requestId, { allow: false, answers: {} });
+  });
+  block.append(cancel);
+
+  /** @type {Array<{ question: string, header: string, read: () => string }>} */
+  const fields = [];
+
+  for (const question of questions) {
+    const item = makeBlock('chat-question-item');
+    if (question.header) item.append(makeBlock('chat-question-header', question.header));
+    item.append(makeBlock('chat-question-text', question.question));
+    fields.push({
+      question: question.question,
+      header: question.header,
+      read: buildQuestionFields(question, item),
+    });
+    block.append(item);
+  }
+
+  const actions = makeBlock('chat-question-actions');
+  const answer = makeButton('Responder', 'chat-question-send');
+  answer.addEventListener('click', () => {
+    /** @type {Record<string, string>} */
+    const answers = {};
+    for (const field of fields) {
+      const value = field.read();
+      if (value) answers[field.question] = value;
+    }
+
+    closeQuestion(requestId, describeAnswers(fields, answers));
+    chat.transport?.respondToQuestion?.(requestId, { allow: true, answers });
+  });
+  actions.append(answer);
+  block.append(actions);
+
+  appendBlock(block);
+  chat.questions.set(requestId, block);
+}
+
 /**
  * Bloco de erro no log.
  * @param {string} message
@@ -461,8 +664,17 @@ export function setTurnRunning(running) {
   chat.streaming = null;
   chat.thinking = null;
 
+  if (running) return;
+
   // Turno terminou: os baloes em carregamento ja cumpriram seu papel, somem.
-  if (!running) sweepSentQueue();
+  sweepSentQueue();
+
+  // E a pergunta que ficou sem resposta nao tem mais para onde ir — o turno que
+  // a esperava acabou. Travar o bloco e dizer isso; deixa-lo clicavel
+  // prometeria um envio que nao acontece mais.
+  for (const requestId of [...chat.questions.keys()]) {
+    closeQuestion(requestId, 'o turno terminou sem resposta');
+  }
 }
 
 /**

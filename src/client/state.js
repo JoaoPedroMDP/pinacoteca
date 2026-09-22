@@ -140,6 +140,10 @@ export const ui = {
  * @property {(text: string) => void} [send] manda a mensagem e abre o stream
  * @property {() => void} [stop] interrompe o turno em andamento
  * @property {(requestId: string, allow: boolean) => void} [respondToPermission]
+ * @property {(requestId: string, reply: { allow: boolean,
+ *   answers: Record<string, string> }) => void} [respondToQuestion] leva ao servidor o
+ *   que o usuario escolheu numa pergunta do agente — ou a recusa dela, quando ele
+ *   cancelou o bloco no "x". Mesmo formato do `Reply` de `agent.js`.
  * @property {(apiKey: string) => void} [saveKey] grava a chave no servidor
  * @property {(config: { model: string, effort: string, sendOnEnter: boolean,
  *   autoApprove: boolean }) => void} [saveConfig]
@@ -161,8 +165,9 @@ export const ui = {
  * - `messages`: as bolhas montadas, na ordem em que entraram no log.
  * - `streaming`: a bolha de assistente que esta crescendo, ou `null` entre
  *   turnos. `thinking` e o corpo do bloco de raciocinio do mesmo turno.
- * - `tools` e `pending`: blocos ainda abertos, pelo id que o servidor mandou —
- *   e por eles que o resultado e a resposta de permissao acham o no certo.
+ * - `tools`, `pending` e `questions`: blocos ainda abertos, pelo id que o
+ *   servidor mandou — e por eles que o resultado, a resposta de permissao e a
+ *   resposta de uma pergunta do agente acham o no certo.
  * - `draftTimer`: o debounce da gravacao do rascunho.
  *
  * @type {{
@@ -176,6 +181,7 @@ export const ui = {
  *   thinking: HTMLElement | null,
  *   tools: Map<string, HTMLElement>,
  *   pending: Map<string, HTMLElement>,
+ *   questions: Map<string, HTMLElement>,
  *   transport: ChatTransport | null,
  *   draftTimer: ReturnType<typeof setTimeout> | null,
  * }}
@@ -191,6 +197,7 @@ export const chat = {
   thinking: null,
   tools: new Map(),
   pending: new Map(),
+  questions: new Map(),
   transport: null,
   draftTimer: null,
 };

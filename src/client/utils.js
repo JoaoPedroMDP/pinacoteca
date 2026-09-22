@@ -326,3 +326,64 @@ export function buildTree(files) {
 export function sortNames(names) {
   return [...names].sort((a, b) => a.localeCompare(b));
 }
+
+/**
+ * @typedef {{ label: string, description: string }} QuestionOption
+ */
+
+/**
+ * @typedef {{ question: string, header: string, multiSelect: boolean,
+ *   options: QuestionOption[] }} Question
+ */
+
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
+function asString(value) {
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Valida as perguntas que o agente mandou no evento `question`, descartando o
+ * que o painel nao saberia desenhar: pergunta sem enunciado, e opcao sem
+ * rotulo. Pergunta que fica sem nenhuma opcao ainda vale — o campo de resposta
+ * livre sozinho e suficiente para responde-la.
+ *
+ * O evento vem do modelo, entao nada aqui pode ser assumido: o board trata
+ * essa lista como trata o texto de uma resposta.
+ *
+ * Funcao pura.
+ *
+ * @param {unknown} raw o campo `questions` do evento, ainda como JSON solto
+ * @returns {Question[]}
+ */
+export function normalizeQuestions(raw) {
+  if (!Array.isArray(raw)) return [];
+
+  /** @type {Question[]} */
+  const questions = [];
+
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const source = /** @type {Record<string, unknown>} */ (entry);
+
+    const question = asString(source.question);
+    if (!question) continue;
+
+    const options = (Array.isArray(source.options) ? source.options : [])
+      .filter((option) => typeof option === 'object' && option !== null)
+      .map((option) => /** @type {Record<string, unknown>} */ (option))
+      .map((option) => ({ label: asString(option.label), description: asString(option.description) }))
+      .filter((option) => option.label !== '');
+
+    questions.push({
+      question,
+      header: asString(source.header),
+      multiSelect: source.multiSelect === true,
+      options,
+    });
+  }
+
+  return questions;
+}

@@ -10,8 +10,8 @@
 // vira um bloco de erro no log, nunca uma promessa rejeitada solta no console.
 
 import {
-  appendChatError, appendAssistantDelta, appendPermissionRequest, appendThinkingDelta,
-  appendToolUse, applyServerConfig, setAutoApprove, setSessionId,
+  appendChatError, appendAssistantDelta, appendPermissionRequest, appendQuestionRequest,
+  appendThinkingDelta, appendToolUse, applyServerConfig, setAutoApprove, setSessionId,
   setTransport, setTurnRunning, updateToolResult,
 } from './chat.js';
 import { setHasAmbientCredential, setHasKey } from './settings.js';
@@ -138,6 +138,10 @@ function applyEvent(event) {
         input: event.input,
         diff: asText(event.diff),
       });
+      break;
+
+    case 'question':
+      appendQuestionRequest({ requestId: asText(event.requestId), questions: event.questions });
       break;
 
     case 'error':
@@ -327,6 +331,25 @@ function respondToPermission(requestId, allow) {
     .catch((error) => appendChatError(describeError(error)));
 }
 
+/**
+ * Resposta do usuario a uma pergunta do agente. Vai pela mesma rota da
+ * permissao: os dois destravam o mesmo `canUseTool` parado do outro lado.
+ *
+ * `allow: false` e o cancelamento — o "x" do bloco. A tool volta negada ao
+ * modelo, que e como se diz "siga sem isto"; mandar `allow: true` com um
+ * `answers` vazio diria outra coisa, que houve escolha e ela foi nenhuma.
+ *
+ * @param {string} requestId
+ * @param {{ allow: boolean, answers: Record<string, string> }} reply
+ */
+function respondToQuestion(requestId, { allow, answers }) {
+  postJson('/permission', { sessionId: chat.sessionId, requestId, allow, answers })
+    .then(async (response) => {
+      if (!response.ok) appendChatError(await failureMessage(response));
+    })
+    .catch((error) => appendChatError(describeError(error)));
+}
+
 /* ---------- Configuracao ---------- */
 
 /**
@@ -406,5 +429,5 @@ export async function connectChat() {
     // inicial. Nao ha nada a fazer aqui alem de nao quebrar a carga.
   }
 
-  setTransport({ send, stop, respondToPermission, saveKey, saveConfig });
+  setTransport({ send, stop, respondToPermission, respondToQuestion, saveKey, saveConfig });
 }

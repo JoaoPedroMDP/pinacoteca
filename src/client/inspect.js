@@ -256,6 +256,20 @@ export function copyXPathAt(file, event) {
 /** @type {Set<string>} chave = `${file} ${xpath}` */
 const openBoxKeys = new Set();
 
+/**
+ * A caixinha que **ja esta na tela**, pela mesma chave de `openBoxKeys`.
+ *
+ * Digitar nela muta o item e chama `notifyQueueChange`, entao o redesenho
+ * acontece a cada tecla. Remontar o `<textarea>` nesse redesenho cancelava a
+ * composicao do navegador — tecla morta de acento (`´` + `a`) nunca fechava em
+ * `á`, e o cursor voltava para o fim. Por isso o no da caixinha aberta
+ * sobrevive ao redesenho: ele e reaproveitado e nunca sai do DOM (sair
+ * significa perder o foco e a composicao junto).
+ *
+ * @type {Map<string, HTMLElement>}
+ */
+const mountedBoxes = new Map();
+
 /** @param {string} file @param {string} xpath */
 const boxKey = (file, xpath) => `${file} ${xpath}`;
 
@@ -447,6 +461,18 @@ function makeRemoveBadge(onRemove) {
 }
 
 /**
+ * Posiciona um balao/caixinha sobre o no ancorado. Fica separado do desenho
+ * porque a caixinha reaproveitada precisa dele sozinho: ela nao e remontada,
+ * so reposicionada.
+ * @param {HTMLElement} node
+ * @param {CommentItem} item
+ */
+function anchorNode(node, item) {
+  node.style.left = `${item.anchorPoint?.x ?? 0}px`;
+  node.style.top = `${item.anchorPoint?.y ?? 0}px`;
+}
+
+/**
  * A caixinha multi-linha: Enter confirma, Shift+Enter quebra linha, digitar
  * atualiza o texto do item ao vivo (a lista "a enviar" do chat acompanha).
  * @param {string} file
@@ -456,8 +482,7 @@ function makeRemoveBadge(onRemove) {
 function buildCommentBox(file, item) {
   const box = document.createElement('div');
   box.className = 'pina-comment-box';
-  box.style.left = `${item.anchorPoint?.x ?? 0}px`;
-  box.style.top = `${item.anchorPoint?.y ?? 0}px`;
+  anchorNode(box, item);
   // O board (escudo por baixo) nao deve iniciar pan/gesto por cima da caixinha.
   box.addEventListener('pointerdown', (event) => event.stopPropagation());
 
@@ -493,8 +518,7 @@ function buildCommentBox(file, item) {
 function buildBalloon(file, item) {
   const balloon = document.createElement('div');
   balloon.className = 'pina-comment-balloon';
-  balloon.style.left = `${item.anchorPoint?.x ?? 0}px`;
-  balloon.style.top = `${item.anchorPoint?.y ?? 0}px`;
+  anchorNode(balloon, item);
 
   const summary = document.createElement('span');
   summary.className = 'pina-comment-summary';
@@ -518,9 +542,38 @@ function buildBalloon(file, item) {
 }
 
 /**
+ * A caixinha daquele item, reaproveitada se ja estiver desenhada. Reaproveitar
+ * e o ponto: o redesenho acontece a cada tecla digitada, e um `<textarea>`
+ * remontado perde o foco e cancela a composicao do acento (veja
+ * `mountedBoxes`).
+ * @param {string} key
+ * @param {string} file
+ * @param {CommentItem} item
+ * @returns {HTMLElement}
+ */
+function commentBoxFor(key, file, item) {
+  const mounted = mountedBoxes.get(key);
+  if (mounted) {
+    anchorNode(mounted, item);
+    return mounted;
+  }
+
+  const box = buildCommentBox(file, item);
+  mountedBoxes.set(key, box);
+  return box;
+}
+
+/**
  * Redesenha baloes e caixinhas de uma tela a partir da fila. Itens
  * `unreferenced` ficam de fora — eles vao para a bandeja
  * (`renderUnreferencedTray`), nao pro card.
+ *
+ * O layer nao e esvaziado de uma vez: so os nos que **sairam** da fila sao
+ * removidos, e os que continuam ficam onde estao. Trocar tudo tiraria do DOM
+ * tambem a caixinha aberta, e com ela o foco e a composicao do teclado. Como
+ * balao e caixinha sao posicionados em absoluto, a ordem dentro do layer nao
+ * importa — o que entra depois pode simplesmente ser anexado no fim.
+ *
  * @param {string} file
  */
 function renderQueueForFile(file) {
@@ -528,17 +581,27 @@ function renderQueueForFile(file) {
   if (!screen) return;
 
   const layer = ensureQueueLayer(screen);
-  layer.replaceChildren();
 
-  const items = commentQueue.get(file);
-  if (!items) return;
+  /** Nos que devem continuar na tela depois deste redesenho. @type {Set<Element>} */
+  const kept = new Set();
+  /** Nos recem-criados, ainda fora do layer. @type {HTMLElement[]} */
+  const fresh = [];
 
-  for (const item of items.values()) {
+  for (const item of commentQueue.get(file)?.values() ?? []) {
     if (item.status === 'unreferenced' || !item.anchorPoint) continue;
 
-    const boxOpen = item.status !== 'sending' && openBoxKeys.has(boxKey(file, item.xpath));
-    layer.append(boxOpen ? buildCommentBox(file, item) : buildBalloon(file, item));
+    const key = boxKey(file, item.xpath);
+    const boxOpen = item.status !== 'sending' && openBoxKeys.has(key);
+    const node = boxOpen ? commentBoxFor(key, file, item) : buildBalloon(file, item);
+
+    kept.add(node);
+    if (node.parentNode !== layer) fresh.push(node);
   }
+
+  for (const child of [...layer.children]) {
+    if (!kept.has(child)) child.remove();
+  }
+  layer.append(...fresh);
 }
 
 /**
@@ -616,6 +679,12 @@ function startUnreferencedDrag(file, xpath, pointerId) {
 // (aqui e em `chat.js`) so precisa chamar `notifyQueueChange`.
 onQueueChange(() => {
   for (const file of screens.keys()) renderQueueForFile(file);
+  // Caixinha que saiu da tela (fechou, virou balao, sumiu com o item) esta
+  // desconectada do documento: e o sinal de que o no nao vale mais ser
+  // guardado. Sem isso um item recriado no mesmo no herdaria o texto antigo.
+  for (const [key, box] of mountedBoxes) {
+    if (!box.isConnected) mountedBoxes.delete(key);
+  }
   renderUnreferencedTray();
 });
 

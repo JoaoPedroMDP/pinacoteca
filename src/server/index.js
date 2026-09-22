@@ -180,9 +180,14 @@ async function handleChat(req, res, pathname, rootDir) {
     return true;
   }
 
+  // A mesma rota destrava os dois pedidos que param no `canUseTool`: a
+  // aprovacao de uma edicao (`allow`) e a resposta a uma pergunta do agente
+  // (`answers`). Sao o mesmo gesto do ponto de vista do servidor — alguem
+  // respondeu o que estava esperando —, e uma rota so evita duas que fariam a
+  // mesma coisa com nomes diferentes.
   if (pathname === `${CHAT_PREFIX}permission`) {
     const requestId = typeof body.requestId === 'string' ? body.requestId : '';
-    resolvePermission(sessionId, requestId, body.allow === true);
+    resolvePermission(sessionId, requestId, body.allow === true, asObject(body.answers));
     sendJson(req, res, 200, { ok: true });
     return true;
   }
@@ -231,7 +236,7 @@ async function routeChat(req, res, pathname, rootDir) {
  * | `POST /api/chat/config` | grava a configuracao e devolve o mesmo    |
  * | `POST /api/chat/message` | um turno, em `text/event-stream`         |
  * | `POST /api/chat/interrupt` | aborta o turno em andamento            |
- * | `POST /api/chat/permission` | responde uma permissao pendente       |
+ * | `POST /api/chat/permission` | responde uma permissao ou pergunta    |
  *
  * @param {{ rootDir: string, hub: SseHub }} context
  * @returns {(req: IncomingMessage, res: ServerResponse) => Promise<void>}

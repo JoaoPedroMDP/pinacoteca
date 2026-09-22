@@ -18,8 +18,8 @@ import { mimeTypeFor, resolveInside } from '../src/server/http.js';
 import { isForbiddenPreviewPath, isHtmlFile, isIgnoredDir, listScreens } from '../src/server/screens.js';
 import { DEFAULT_CONFIG, mergeConfig, publicConfig } from '../src/server/config.js';
 import {
-  agentEnv, buildDiff, escapingPath, hasAmbientCredential, hasCredential, hasKeychainCredential,
-  translateMessage,
+  agentEnv, answeredInput, buildDiff, escapingPath, hasAmbientCredential, hasCredential,
+  hasKeychainCredential, translateMessage,
 } from '../src/server/agent.js';
 import { commentQueue, source } from '../src/client/state.js';
 import {
@@ -27,8 +27,8 @@ import {
 } from '../src/client/storage.js';
 import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
-  clampSidebarWidth, previewUrl, rectsOverlap, resizeZoneAt, resolveXPath,
-  separateOverlaps, serializeCommentQueue, snapToGrid, sortNames,
+  clampSidebarWidth, normalizeQuestions, previewUrl, rectsOverlap, resizeZoneAt,
+  resolveXPath, separateOverlaps, serializeCommentQueue, snapToGrid, sortNames,
 } from '../src/client/utils.js';
 
 /* ---------- cli.js ---------- */
@@ -216,6 +216,28 @@ test('escapingPath pega o caminho que sai da raiz', () => {
   assert.equal(escapingPath('/tmp/proto', { file_path: '../fora.html' }), '/tmp/fora.html');
   // Prefixo parecido nao e a mesma pasta.
   assert.equal(escapingPath('/tmp/proto', { path: '/tmp/proto2/a.html' }), '/tmp/proto2/a.html');
+});
+
+test('answeredInput devolve a entrada com as respostas do usuario dentro', () => {
+  const input = { questions: [{ question: 'Qual layout?' }, { question: 'Qual cor?' }] };
+  const result = answeredInput(input, { 'Qual layout?': 'Grade', 'Qual cor?': 'Escuro' });
+
+  assert.deepEqual(result.answers, { 'Qual layout?': 'Grade', 'Qual cor?': 'Escuro' });
+  assert.deepEqual(result.questions, input.questions);
+});
+
+test('answeredInput descarta resposta que nao corresponde a pergunta feita', () => {
+  const input = { questions: [{ question: 'Qual layout?' }] };
+
+  // Pergunta que a tool nao fez, resposta vazia e resposta que nao e texto.
+  assert.deepEqual(
+    answeredInput(input, { 'Outra pergunta': 'x', 'Qual layout?': '' }).answers, {});
+  assert.deepEqual(answeredInput(input, { 'Qual layout?': 42 }).answers, {});
+});
+
+test('answeredInput sobrevive a uma entrada sem perguntas', () => {
+  assert.deepEqual(answeredInput({}, { a: 'b' }), { answers: {} });
+  assert.deepEqual(answeredInput({ questions: 'nao e lista' }, {}).answers, {});
 });
 
 test('translateMessage vira text e thinking a partir dos eventos parciais', () => {
@@ -863,4 +885,40 @@ test('serializeCommentQueue descarta itens sem referencia', () => {
 test('serializeCommentQueue devolve vazio sem item elegivel', () => {
   assert.equal(serializeCommentQueue(new Map()), '');
   assert.equal(serializeCommentQueue(queueOf([['a.html', '//*[@id="x"]', 'sumiu', 'unreferenced']])), '');
+});
+
+test('normalizeQuestions aceita a pergunta completa', () => {
+  const [question] = normalizeQuestions([{
+    question: 'Qual layout?',
+    header: 'Layout',
+    multiSelect: true,
+    options: [
+      { label: 'Grade', description: 'cards lado a lado' },
+      { label: 'Lista', description: 'um embaixo do outro' },
+    ],
+  }]);
+
+  assert.equal(question.question, 'Qual layout?');
+  assert.equal(question.header, 'Layout');
+  assert.equal(question.multiSelect, true);
+  assert.deepEqual(question.options.map((option) => option.label), ['Grade', 'Lista']);
+});
+
+test('normalizeQuestions descarta o que o painel nao saberia desenhar', () => {
+  const questions = normalizeQuestions([
+    'nao e objeto',
+    { header: 'sem enunciado' },
+    { question: 'Vale?', options: [{ description: 'sem rotulo' }, { label: 'Sim' }] },
+  ]);
+
+  assert.equal(questions.length, 1);
+  assert.deepEqual(questions[0].options, [{ label: 'Sim', description: '' }]);
+  // Campo ausente vira o padrao, nunca `undefined` no meio do desenho.
+  assert.equal(questions[0].header, '');
+  assert.equal(questions[0].multiSelect, false);
+});
+
+test('normalizeQuestions devolve lista vazia para o que nao e lista', () => {
+  assert.deepEqual(normalizeQuestions(undefined), []);
+  assert.deepEqual(normalizeQuestions({ questions: [] }), []);
 });

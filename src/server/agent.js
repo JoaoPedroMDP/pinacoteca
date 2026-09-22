@@ -34,15 +34,23 @@ import { readConfig } from './config.js';
  *  | { type: 'tool', id: string, name: string, input: Record<string, unknown> }
  *  | { type: 'tool-result', id: string, ok: boolean, summary: string }
  *  | { type: 'permission', requestId: string, toolName: string, input: Record<string, unknown>, diff: string }
+ *  | { type: 'question', requestId: string, questions: unknown[] }
  *  | { type: 'error', message: string }
  *  | { type: 'done', stopReason: string }} ChatEvent
+ */
+
+/**
+ * Resposta do usuario a um pedido parado no `canUseTool`. Uma permissao usa so
+ * `allow`; uma pergunta usa `answers`, uma resposta por texto de pergunta.
+ *
+ * @typedef {{ allow: boolean, answers: Record<string, unknown> }} Reply
  */
 
 /**
  * @typedef {object} Session
  * @property {string} id
  * @property {AbortController | null} controller turno em andamento, se houver
- * @property {Map<string, (allow: boolean) => void>} pending permissoes esperando resposta
+ * @property {Map<string, (reply: Reply) => void>} pending pedidos esperando resposta
  */
 
 /** Bloco de conteudo de uma mensagem do SDK, visto so pelo que usamos dele. */
@@ -58,6 +66,12 @@ const DIFF_MAX_LINES = 40;
 // Campos de entrada de tool que carregam caminho de arquivo. Sao os que
 // precisam ser conferidos contra a raiz observada.
 const PATH_FIELDS = ['file_path', 'path', 'notebook_path'];
+
+// A tool com que o agente faz uma pergunta em vez de pedir uma escrita. Ela
+// passa pelo mesmo `canUseTool`, mas nao e uma aprovacao: o que o usuario
+// escolhe volta dentro do `updatedInput`, no campo `answers` (veja
+// `answeredInput`), e e assim que a resposta chega ao modelo.
+const QUESTION_TOOL = 'AskUserQuestion';
 
 /** @type {Map<string, Session>} */
 const sessions = new Map();
@@ -163,6 +177,48 @@ export function escapingPath(rootDir, input) {
 }
 
 /**
+ * As perguntas de uma entrada de `AskUserQuestion`, ou lista vazia quando o
+ * campo nao veio como se espera.
+ *
+ * @param {Record<string, unknown>} input
+ * @returns {unknown[]}
+ */
+function questionsOf(input) {
+  return Array.isArray(input.questions) ? input.questions : [];
+}
+
+/**
+ * A entrada da tool de pergunta com as respostas do usuario dentro.
+ *
+ * E assim que a resposta chega ao modelo: o `canUseTool` devolve este
+ * `updatedInput`, a tool roda com ele e o resultado carrega o que foi
+ * escolhido. Resposta a uma pergunta que a tool nao fez e descartada — o board
+ * nao inventa chave numa entrada que o modelo vai ler —, e so texto conta.
+ *
+ * Funcao pura.
+ *
+ * @param {Record<string, unknown>} input entrada da tool, como o SDK a entregou
+ * @param {Record<string, unknown>} answers resposta por texto da pergunta
+ * @returns {Record<string, unknown>}
+ */
+export function answeredInput(input, answers) {
+  /** @type {Record<string, string>} */
+  const kept = {};
+
+  for (const question of questionsOf(input)) {
+    const text = (typeof question === 'object' && question !== null)
+      ? /** @type {Record<string, unknown>} */ (question).question
+      : undefined;
+    if (typeof text !== 'string' || text === '') continue;
+
+    const answer = answers[text];
+    if (typeof answer === 'string' && answer !== '') kept[text] = answer;
+  }
+
+  return { ...input, answers: kept };
+}
+
+/**
  * @param {Block} event evento de streaming da Messages API
  * @returns {ChatEvent[]}
  */
@@ -232,13 +288,45 @@ export function translateMessage(message) {
   return [];
 }
 
+/** Resposta de quem nunca respondeu: o turno foi abortado por baixo do pedido. */
+const NO_REPLY = /** @type {Reply} */ ({ allow: false, answers: {} });
+
 /**
- * O `canUseTool` da sessao. Com `autoApprove` ligado aprova na hora; senao
- * publica um evento `permission` e devolve uma Promise que so resolve quando
- * `resolvePermission` chegar.
+ * Espera a resposta do usuario a um pedido ja publicado no stream.
  *
- * O abort do turno resolve a Promise como recusa: uma permissao que ninguem
- * responde nao pode segurar o processo do SDK para sempre.
+ * O abort do turno resolve como recusa: um pedido que ninguem responde nao pode
+ * segurar o processo do SDK para sempre.
+ *
+ * @param {Session} session
+ * @param {string} requestId
+ * @param {AbortSignal} signal
+ * @returns {Promise<Reply>}
+ */
+function waitForReply(session, requestId, signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(NO_REPLY);
+      return;
+    }
+    session.pending.set(requestId, resolve);
+    signal.addEventListener('abort', () => {
+      session.pending.delete(requestId);
+      resolve(NO_REPLY);
+    }, { once: true });
+  });
+}
+
+/**
+ * O `canUseTool` da sessao. Ele guarda duas conversas com o usuario, e a ordem
+ * entre elas importa:
+ *
+ * 1. `escapingPath` nega escrita fora da raiz, antes de tudo;
+ * 2. **a pergunta do agente** (`AskUserQuestion`) para e espera a escolha do
+ *    usuario — inclusive com o `autoApprove` ligado. O automatico existe para
+ *    nao perguntar "posso escrever?" vinte vezes; aprovar sozinho uma pergunta
+ *    responderia por quem ela queria ouvir, e o modelo receberia um `answers`
+ *    vazio;
+ * 3. o resto e a aprovacao de edicao de sempre.
  *
  * @param {{ session: Session, config: ChatConfig, rootDir: string,
  *          emit: (event: ChatEvent) => void }} params
@@ -252,24 +340,23 @@ function permissionGate({ session, config, rootDir, emit }) {
       return { behavior: 'deny', message: `Fora da pasta observada da pinacoteca: ${outside}` };
     }
 
+    if (toolName === QUESTION_TOOL) {
+      const requestId = randomUUID();
+      emit({ type: 'question', requestId, questions: questionsOf(input) });
+
+      const reply = await waitForReply(session, requestId, signal);
+      return reply.allow
+        ? { behavior: 'allow', updatedInput: answeredInput(input, reply.answers) }
+        : { behavior: 'deny', message: 'O usuario nao respondeu a pergunta.' };
+    }
+
     if (config.autoApprove) return { behavior: 'allow', updatedInput: input };
 
     const requestId = randomUUID();
     emit({ type: 'permission', requestId, toolName, input, diff: buildDiff(toolName, input) });
 
-    const allowed = await new Promise((resolve) => {
-      if (signal.aborted) {
-        resolve(false);
-        return;
-      }
-      session.pending.set(requestId, resolve);
-      signal.addEventListener('abort', () => {
-        session.pending.delete(requestId);
-        resolve(false);
-      }, { once: true });
-    });
-
-    return allowed
+    const reply = await waitForReply(session, requestId, signal);
+    return reply.allow
       ? { behavior: 'allow', updatedInput: input }
       : { behavior: 'deny', message: 'O usuario recusou esta acao.' };
   };
@@ -285,19 +372,23 @@ function describeError(error) {
 }
 
 /**
- * Responde uma permissao pendente.
+ * Responde um pedido pendente — a aprovacao de uma edicao ou a escolha do
+ * usuario numa pergunta do agente. Os dois param no mesmo `canUseTool`, entao
+ * os dois se destravam por aqui.
  *
  * @param {string} sessionId
  * @param {string} requestId
  * @param {boolean} allow
+ * @param {Record<string, unknown>} [answers] resposta por texto da pergunta;
+ *   vazio numa aprovacao de edicao
  * @returns {boolean} false se ninguem estava esperando por esse pedido
  */
-export function resolvePermission(sessionId, requestId, allow) {
+export function resolvePermission(sessionId, requestId, allow, answers = {}) {
   const session = sessions.get(sessionId);
   const resolve = session?.pending.get(requestId);
   if (!session || !resolve) return false;
   session.pending.delete(requestId);
-  resolve(allow);
+  resolve({ allow, answers });
   return true;
 }
 
@@ -526,8 +617,8 @@ export async function runTurn({ rootDir, sessionId, text, onEvent }) {
     if (!controller.signal.aborted) emit({ type: 'error', message: describeError(error) });
   } finally {
     session.controller = null;
-    // Permissao que ficou pendurada morre com o turno.
-    for (const resolve of session.pending.values()) resolve(false);
+    // Pedido que ficou pendurado (permissao ou pergunta) morre com o turno.
+    for (const resolve of session.pending.values()) resolve(NO_REPLY);
     session.pending.clear();
     emit({ type: 'done', stopReason: controller.signal.aborted ? 'interrupted' : 'end_turn' });
   }

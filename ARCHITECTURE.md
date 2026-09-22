@@ -203,6 +203,54 @@ processo do SDK para sempre, então abortar o turno resolve as pendentes como re
 agente não consegue ler nada fora da raiz — inclusive quando o usuário queria, o que é
 uma limitação real e é preferível ao contrário.
 
+### A pergunta do agente passa pela mesma porta, mas não é uma aprovação
+
+Às vezes o agente não quer escrever nada: ele quer *saber* de qual jeito seguir, e chama
+a tool `AskUserQuestion` com uma lista de perguntas e opções. Ela cai no mesmo
+`canUseTool` das escritas — é por ali que toda tool passa —, e é só isso que as duas têm
+em comum.
+
+A diferença é o que volta. Uma permissão devolve sim ou não; uma pergunta devolve
+**conteúdo**: o `canUseTool` responde `allow` com um `updatedInput` em que o campo
+`answers` carrega a escolha do usuário, chaveada pelo enunciado de cada pergunta
+(`answeredInput`, pura e testada). É assim que a resposta chega ao modelo — a tool roda
+com essa entrada e o resultado dela é o que ele lê.
+
+Daí a ordem dentro do `canUseTool`: o cadeado da raiz primeiro, **a pergunta em seguida,
+antes do `autoApprove`**, e a aprovação de edição por último. O automático existe para
+não perguntar "posso escrever?" vinte vezes seguidas; aprovar sozinho uma *pergunta*
+responderia por quem ela queria ouvir, e o modelo receberia um `answers` vazio — o
+oposto do que a tool foi chamada para conseguir.
+
+No navegador ela vira um bloco com as opções clicáveis e um campo de resposta livre por
+pergunta. O campo livre vence a opção marcada, e marcar uma opção limpa o campo: são duas
+formas de responder a mesma pergunta, e a mais recente é a que vale. Numa pergunta
+`multiSelect` o clique alterna a própria opção e as escolhas se acumulam (juntadas por
+vírgula); numa de escolha única ele desmarca as irmãs. `normalizeQuestions` (`utils.js`,
+pura) descarta o que o painel não saberia desenhar — pergunta sem enunciado, opção sem
+rótulo —, porque essa lista foi escrita pelo modelo e o board a trata como trata qualquer
+texto vindo de fora. Evento em que não sobra pergunta nenhuma vira um bloco de erro **e**
+responde na mesma hora: o turno do outro lado está parado esperando, e sumir calado o
+deixaria pendurado até o usuário apertar Parar.
+
+**Uma chamada traz até quatro perguntas, e elas são um bloco só.** Cada uma vira um item
+com os campos dela, e há um único Responder, que manda todas juntas. Não é escolha de
+layout: do outro lado é *um* `canUseTool`, e responder uma de cada vez o destravaria antes
+de as outras terem resposta. Pelo mesmo motivo o **"x" cancela o bloco inteiro** — é um
+pedido só. O rodapé de um bloco respondido escreve uma linha por pergunta, com o chip (ou
+o enunciado) na frente: com mais de uma, `Lista · Escuro` não diria qual foi qual.
+
+O "x" **não é uma resposta vazia**: ele responde `allow: false`, e a tool volta ao modelo
+negada. É a diferença entre "siga sem isto" e "escolhi, e escolhi nada" — a segunda é o
+que um `allow: true` com `answers` vazio diria, e não é o que o usuário fez ao cancelar.
+Por isso o que o painel manda ao transporte tem o mesmo formato do `Reply` do servidor,
+`{ allow, answers }`, em vez de só o mapa de respostas.
+
+A resposta volta pela rota da permissão (`POST /api/chat/permission`, com `answers`), e
+não por uma rota nova: do ponto de vista do servidor as duas são o mesmo gesto — alguém
+respondeu o pedido que estava esperando —, e `session.pending` já é o lugar onde esse
+alguém é aguardado.
+
 ### `agentEnv`: a chave escolhida tem de ser a chave usada
 
 O processo do SDK recebe o ambiente do servidor. Se há chave configurada na pinacoteca,
@@ -310,8 +358,8 @@ rota.
 
 `config.js` e `agent.js` não se conhecem pela metade: `agent.js` importa a configuração,
 e `config.js` não sabe que existe um agente. As duas funções que decidem algo sozinhas
-(`mergeConfig`, `escapingPath`, `buildDiff`, `translateMessage`, `agentEnv`,
-`hasCredential`) são puras e estão no `test/unit.mjs`; o resto é IO e stream.
+(`mergeConfig`, `escapingPath`, `buildDiff`, `answeredInput`, `translateMessage`,
+`agentEnv`, `hasCredential`) são puras e estão no `test/unit.mjs`; o resto é IO e stream.
 
 `screens.js` decide duas coisas com a mesma regra: o que a varredura ignora e o que
 `/preview/` recusa servir. Elas moram juntas de propósito — se divergirem, a ferramenta
@@ -331,7 +379,7 @@ lugar só, no `send` de `http.js`, e não em cada rota.
 | Guardar a configuração | `GET`/`POST /api/chat/config` leem e gravam o arquivo de configuração — sempre pela projeção `publicConfig`, sem a chave |
 | Conversar | `POST /api/chat/message` roda um turno e escreve os eventos dele na própria resposta |
 | Obedecer ao Parar | `POST /api/chat/interrupt` aborta o turno em andamento daquela sessão |
-| Responder a permissão | `POST /api/chat/permission` destrava o `canUseTool` que estava esperando |
+| Responder a permissão | `POST /api/chat/permission` destrava o `canUseTool` que estava esperando — a aprovação de uma edição ou a resposta a uma pergunta do agente |
 
 Rotas, na íntegra:
 
@@ -346,7 +394,7 @@ Rotas, na íntegra:
 | `POST /api/chat/config` | `{ apiKey?, model?, effort?, autoApprove?, sendOnEnter? }` | igual ao `GET` |
 | `POST /api/chat/message` | `{ sessionId, text }` | `text/event-stream` com os eventos da conversa |
 | `POST /api/chat/interrupt` | `{ sessionId }` | `{ ok: true }` |
-| `POST /api/chat/permission` | `{ sessionId, requestId, allow }` | `{ ok: true }` |
+| `POST /api/chat/permission` | `{ sessionId, requestId, allow, answers? }` | `{ ok: true }` |
 
 **`POST` existe só embaixo de `/api/chat/`.** O resto do servidor continua respondendo
 apenas `GET` e `HEAD`, e o roteador separa os dois mundos na primeira linha: quem não
@@ -405,6 +453,7 @@ linha `data:`. Ele é gerado em `agent.js` (`ChatEvent`) e consumido em `chat-cl
 { "type": "tool",        "id": "...", "name": "Edit", "input": { } }
 { "type": "tool-result", "id": "...", "ok": true, "summary": "..." }
 { "type": "permission",  "requestId": "...", "toolName": "Edit", "input": { }, "diff": "..." }
+{ "type": "question",    "requestId": "...", "questions": [ ] }
 { "type": "error",       "message": "..." }
 { "type": "done",        "stopReason": "end_turn" }                 // sempre o último, sempre um
 ```
@@ -495,7 +544,10 @@ Duas regras seguram essa divisão:
   aprovação automática e modo de envio. Todo texto que vem do modelo ou dos arquivos do
   usuário entra por `textContent`, nunca por `innerHTML`: é conteúdo de fora, e o board o
   trata como tal. O log acompanha o fim só para quem já estava no fim — quem rolou para
-  cima para ler não tem a viewport arrastada.
+  cima para ler não tem a viewport arrastada. O painel inteiro usa uma fonte menor que a
+  do resto do board, e os tamanhos de dentro dele são relativos a ela (`em`): a coluna é
+  estreita e empilha bolha, ferramenta, diff e permissão coladas, então o corpo do board
+  aperta ali. Mexer no `font-size` do painel mexe no painel todo.
 - **Compositor** — cresce com o conteúdo até `CHAT_INPUT_MAX_HEIGHT` e daí rola por
   dentro; tem pilha de desfazer própria (`CHAT_UNDO_LIMIT`, agrupada por pausa de
   `CHAT_UNDO_GROUP_MS`) porque o desfazer nativo do textarea brigaria com as trocas de
@@ -503,6 +555,19 @@ Duas regras seguram essa divisão:
   `CHAT_DRAFT_DEBOUNCE_MS`; e a seta pra cima percorre as mensagens já enviadas, mas só
   quando o cursor está na ponta certa do texto, para não roubar a navegação de dentro do
   campo.
+
+#### O log é linear
+
+Todo bloco novo do log **fecha os blocos abertos do turno**, e isso é decidido num lugar
+só: o `appendBlock` de `chat.js`. Sem essa regra a bolha do assistente continuava aberta
+depois de um bloco de ferramenta, e o texto que chegasse em seguida voltava a crescer
+*acima* do Edit ou do Bash que já tinha entrado embaixo dela — o log deixava de contar a
+história na ordem em que ela aconteceu, que é justamente o que se lê nele.
+
+Quem abre um bloco (`beginAssistantMessage`, `beginThinking`) registra o seu **depois** de
+chamar o `appendBlock`, então o bloco recém-criado não se fecha sozinho. É o que permite a
+resposta continuar crescendo em streaming numa bolha só enquanto nada entra entre os
+deltas.
 
 Cada `iframe` começa com 1280px (referência de desktop), mas nem largura nem altura ficam
 fixas: no `load` de cada iframe o conteúdo real é medido (possível porque tudo é mesma
@@ -802,7 +867,18 @@ mudam o item.
 
 A fila vive em `commentQueue` (`state.js`), `Map<arquivo, Map<xpath, CommentItem>>`; quem
 muta é só `inspect.js`, e tanto o board quanto o painel de chat se inscrevem em
-`onQueueChange` para redesenhar a partir dela — nenhum dos dois guarda cópia própria. O
+`onQueueChange` para redesenhar a partir dela — nenhum dos dois guarda cópia própria.
+
+**O redesenho não pode remontar a caixinha aberta.** Digitar nela muta o item e notifica a
+fila, então o redesenho acontece a cada tecla; e tirar o `<textarea>` do DOM no meio disso
+tira junto o foco e **cancela a composição do teclado** — uma tecla morta de acento (`´`
+seguido de `a`) nunca fechava em `á`, e o cursor ainda voltava para o fim. Por isso a
+caixinha aberta é guardada por chave e reaproveitada (`mountedBoxes`): ela só é
+reposicionada, nunca reconstruída, e o layer remove apenas os nós que saíram da fila em
+vez de trocar todos de uma vez. A ordem dentro do layer não importa — balão e caixinha são
+posicionados em absoluto —, então o que entra depois pode ser anexado no fim. Uma caixinha
+que saiu da tela fica desconectada do documento, e é esse o sinal de que o nó guardado não
+vale mais. O
 painel de chat espelha a fila numa lista "a enviar" (`chat.js`), com o mesmo botão "x" por
 item; removê-lo em qualquer um dos dois lados chama o mesmo `removeCommentItem` e some dos
 dois. Ao apertar Enviar com algo na fila, `serializeCommentQueue` (`utils.js`, função pura)
@@ -896,8 +972,10 @@ e `LICENSE` — o `files` do `package.json` não precisou mudar, porque o códig
 **Unitário** (`node:test`) cobre função que decide algo sozinha: leitura de argumentos,
 resolução de caminho seguro, política de arquivo proibido, árvore da sidebar, XPath,
 validação da configuração (`mergeConfig`, `publicConfig`), e do lado do agente
-`escapingPath`, `buildDiff`, `translateMessage`, `agentEnv` e `hasCredential`. São
-decisões que cabem em entrada e saída, e testar cada uma custa milissegundos.
+`escapingPath`, `buildDiff`, `answeredInput`, `translateMessage`, `agentEnv` e
+`hasCredential`, mais a validação das perguntas que chegam do modelo
+(`normalizeQuestions`). São decisões que cabem em entrada e saída, e testar cada uma custa
+milissegundos.
 
 O `storage.js` do cliente é a exceção que precisou de um arranjo: ele lê e escreve
 `localStorage`, que não existe no `node --test`. Em vez de extrair a decisão para um
@@ -1041,6 +1119,7 @@ E o que **fica por conta do usuário**, dito sem rodeio:
    | Uma aba nova na sidebar | `src/client/tabs.js` + `index.html` |
    | Uma preferência ou credencial do agente | `src/server/config.js` |
    | O que o agente pode fazer: tool, permissão, limite | `src/server/agent.js` |
+   | Uma pergunta do agente ao usuário: bloco, opções, resposta, cancelamento | `src/server/agent.js` (`canUseTool` e `answeredInput`), `src/client/chat.js` (o bloco), `src/client/utils.js` (`normalizeQuestions`) |
 
 3. **Guarde estado em `state.js`**, não num `let` novo no meio do módulo. A exceção é
    estado de um gesto em andamento, que morre com o gesto.

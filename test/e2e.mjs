@@ -888,6 +888,20 @@ await checkEventually('rejeitar fecha o pedido de permissao', async () => (
     "!!document.querySelector('#chat-log .chat-permission.is-rejected')"
     + " && document.querySelector('#chat-log .chat-permission-approve').disabled")));
 
+// O log conta a historia na ordem em que ela aconteceu: texto que chega depois
+// de um bloco de ferramenta abre bolha nova no fim, em vez de voltar a crescer
+// na bolha que estava aberta antes dele.
+await board.evaluate("import('/app/chat.js').then((m) => m.appendAssistantDelta('depois da tool'))");
+
+await checkEventually('texto depois de uma ferramenta abre bolha nova no fim do log', async () => (
+  await board.evaluate(`(() => {
+    const bubbles = document.querySelectorAll('#chat-log .chat-msg.is-assistant');
+    return bubbles.length === 2
+      && bubbles[0].textContent === 'resposta'
+      && bubbles[1].textContent === 'depois da tool'
+      && document.getElementById('chat-log').lastElementChild === bubbles[1];
+  })()`)));
+
 /* ---------- Transporte da conversa ---------- */
 
 process.stdout.write('\nTransporte da conversa\n');
@@ -1098,9 +1112,24 @@ await board.evaluate("document.querySelector('[data-action=\"toggle-mode\"]').cl
 await board.evaluate(gestureOn('login.html', "PointerEvent('pointerdown'", 'button: 0,'));
 await checkEventually('clique simples em modo ponteiro abre a caixinha', async () => (await commentBoxTextarea()) === '');
 
+// Digitar muta o item e redesenha a fila inteira. Se o redesenho remontasse o
+// `<textarea>`, a composicao de uma tecla morta (`\u00b4` seguido de `a`) seria
+// cancelada no meio e o acento nunca fecharia em `\u00e1` — o no precisa ser o
+// mesmo, e ainda com o foco, depois da tecla.
+await board.evaluate(`(() => {
+  const textarea = document.querySelector('.pina-comment-box textarea');
+  textarea.dataset.marca = 'antes';
+  textarea.focus();
+})()`);
+
 await typeInBox('linha 1');
 await checkEventually('a lista "a enviar" acompanha o rascunho ao vivo',
   async () => (await queueListText()).includes('linha 1'));
+
+check('digitar nao remonta a caixinha: o mesmo textarea continua na tela',
+  (await board.evaluate("document.querySelector('.pina-comment-box textarea')?.dataset.marca ?? null")) === 'antes');
+check('e ele nao perde o foco, que e o que preserva a composicao do acento',
+  await board.evaluate("document.activeElement === document.querySelector('.pina-comment-box textarea')"));
 
 await pressInBox({ shiftKey: true });
 check('Shift+Enter nao confirma: a caixinha continua aberta', (await balloonCount()) === 0);
@@ -1168,6 +1197,158 @@ check('a fila trava: balao em carregamento perde o "x"',
 await board.evaluate("import('/app/chat.js').then((m) => m.setTurnRunning(false))");
 await checkEventually('turno terminado remove o balao em carregamento', async () => (await balloonCount()) === 0);
 check('e some da lista "a enviar"', await queueHidden());
+
+/* ---------- Perguntas do agente ---------- */
+
+process.stdout.write('\nPerguntas do agente\n');
+
+await board.evaluate(`(async () => {
+  const chat = await import('/app/chat.js');
+  window.__answers = [];
+  chat.setTransport({
+    respondToQuestion: (requestId, reply) => window.__answers.push({ requestId, reply }),
+  });
+  chat.appendQuestionRequest({
+    requestId: 'q1',
+    questions: [{
+      question: 'Qual layout?',
+      header: 'Layout',
+      options: [
+        { label: 'Grade', description: 'cards lado a lado' },
+        { label: 'Lista', description: 'um embaixo do outro' },
+      ],
+    }],
+  });
+})()`);
+
+await checkEventually('a pergunta do agente vira um bloco com as opcoes clicaveis', async () => (
+  await board.evaluate("document.querySelectorAll('#chat-log .chat-question .chat-question-option').length === 2")));
+
+await board.evaluate("document.querySelectorAll('.chat-question-option')[1].click()");
+check('clicar numa opcao a marca', await board.evaluate(
+  "document.querySelectorAll('.chat-question-option')[1].getAttribute('aria-pressed') === 'true'"));
+
+await board.evaluate("document.querySelector('.chat-question-send').click()");
+await checkEventually('responder leva a escolha ao transporte, chaveada pelo enunciado', async () => {
+  const sent = await board.evaluate('window.__answers');
+  return Array.isArray(sent) && sent.length === 1 && sent[0].requestId === 'q1'
+    && sent[0].reply.allow === true
+    && sent[0].reply.answers['Qual layout?'] === 'Lista';
+});
+
+check('o bloco trava depois de respondido', await board.evaluate(
+  "!!document.querySelector('.chat-question.is-answered')"
+  + " && document.querySelector('.chat-question-send').disabled"));
+
+// Uma chamada traz ate quatro perguntas, e elas sao um pedido so: um bloco, um
+// Responder, todas as respostas juntas. `multiSelect` acumula escolhas na mesma
+// pergunta; a de escolha unica troca.
+await board.evaluate(`(async () => {
+  const chat = await import('/app/chat.js');
+  chat.appendQuestionRequest({
+    requestId: 'q3',
+    questions: [
+      {
+        question: 'Qual layout?',
+        header: 'Layout',
+        options: [{ label: 'Grade', description: '' }, { label: 'Lista', description: '' }],
+      },
+      {
+        question: 'Quais telas?',
+        header: 'Telas',
+        multiSelect: true,
+        options: [
+          { label: 'Login', description: '' },
+          { label: 'Dashboard', description: '' },
+          { label: 'Perfil', description: '' },
+        ],
+      },
+    ],
+  });
+})()`);
+
+const lastQuestionBlock = "[...document.querySelectorAll('#chat-log .chat-question')].at(-1)";
+
+await checkEventually('as duas perguntas entram no mesmo bloco, com os campos de cada uma', async () => (
+  await board.evaluate(`(() => {
+    const block = ${lastQuestionBlock};
+    return block.querySelectorAll('.chat-question-item').length === 2
+      && block.querySelectorAll('.chat-question-other').length === 2
+      && block.querySelectorAll('.chat-question-option').length === 5
+      && block.querySelectorAll('.chat-question-send').length === 1;
+  })()`)));
+
+await board.evaluate(`(() => {
+  const block = ${lastQuestionBlock};
+  const options = [...block.querySelectorAll('.chat-question-option')];
+  options[0].click();          // Grade, escolha unica
+  options[2].click();          // Login, multipla
+  options[3].click();          // Dashboard, multipla
+})()`);
+
+check('multiSelect acumula escolhas e a escolha unica nao e afetada', await board.evaluate(
+  `(() => {
+    const block = ${lastQuestionBlock};
+    const pressed = [...block.querySelectorAll('.chat-question-option[aria-pressed="true"]')]
+      .map((option) => option.textContent);
+    return pressed.length === 3 && pressed.includes('Grade')
+      && pressed.includes('Login') && pressed.includes('Dashboard');
+  })()`));
+
+await board.evaluate(`${lastQuestionBlock}.querySelector('.chat-question-send').click()`);
+await checkEventually('as duas respostas vao juntas, cada uma na chave dela', async () => {
+  const sent = await board.evaluate('window.__answers');
+  const last = Array.isArray(sent) ? sent.at(-1) : null;
+  return Boolean(last) && last.requestId === 'q3' && last.reply.allow === true
+    && last.reply.answers['Qual layout?'] === 'Grade'
+    && last.reply.answers['Quais telas?'] === 'Login, Dashboard';
+});
+
+// O "x" nao e uma resposta vazia: ele recusa a tool, e o modelo segue sem ela.
+await board.evaluate(`(async () => {
+  const chat = await import('/app/chat.js');
+  chat.appendQuestionRequest({
+    requestId: 'q4',
+    questions: [{
+      question: 'Prossigo?',
+      header: 'Rumo',
+      options: [{ label: 'Sim', description: '' }, { label: 'Nao', description: '' }],
+    }],
+  });
+})()`);
+
+await checkEventually('a pergunta traz um "x" para cancelar', async () => (
+  await board.evaluate(`!!${lastQuestionBlock}.querySelector('.chat-question-cancel')`)));
+
+await board.evaluate(`${lastQuestionBlock}.querySelector('.chat-question-cancel').click()`);
+await checkEventually('o "x" recusa a pergunta em vez de responde-la vazia', async () => {
+  const sent = await board.evaluate('window.__answers');
+  const last = Array.isArray(sent) ? sent.at(-1) : null;
+  return Boolean(last) && last.requestId === 'q4' && last.reply.allow === false
+    && Object.keys(last.reply.answers).length === 0;
+});
+
+check('e o bloco cancelado trava junto com o proprio "x"', await board.evaluate(
+  `(() => {
+    const block = ${lastQuestionBlock};
+    return block.classList.contains('is-answered')
+      && block.querySelector('.chat-question-cancel').disabled
+      && block.querySelector('.chat-question-send').disabled;
+  })()`));
+
+// Pergunta sem nada que o painel saiba desenhar nao pode sumir calada: o turno
+// do outro lado esta parado esperando resposta.
+await board.evaluate(`(async () => {
+  const chat = await import('/app/chat.js');
+  chat.appendQuestionRequest({ requestId: 'q2', questions: ['nao e pergunta'] });
+})()`);
+
+await checkEventually('pergunta indesenhavel vira erro no log e e respondida vazia', async () => {
+  const sent = await board.evaluate('window.__answers');
+  const last = Array.isArray(sent) ? sent.at(-1) : null;
+  return Boolean(last) && last.requestId === 'q2' && last.reply.allow === false
+    && Object.keys(last.reply.answers).length === 0;
+});
 
 /* ---------- Reancoragem apos reload do prototipo ---------- */
 
