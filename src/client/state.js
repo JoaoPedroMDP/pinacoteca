@@ -168,6 +168,10 @@ export const ui = {
  * - `tools`, `pending` e `questions`: blocos ainda abertos, pelo id que o
  *   servidor mandou — e por eles que o resultado, a resposta de permissao e a
  *   resposta de uma pergunta do agente acham o no certo.
+ * - `lastTool`: o bloco de ferramenta que esta no fim do log, quando ele mira
+ *   um arquivo. E o que permite a acao seguinte, se for a mesma no mesmo
+ *   arquivo, virar um contador nele em vez de uma linha nova. Vale so
+ *   enquanto ele for o ultimo: qualquer outro bloco o zera (`appendBlock`).
  * - `draftTimer`: o debounce da gravacao do rascunho.
  *
  * @type {{
@@ -180,6 +184,7 @@ export const ui = {
  *   streaming: ChatMessage | null,
  *   thinking: HTMLElement | null,
  *   tools: Map<string, HTMLElement>,
+ *   lastTool: { name: string, target: string, block: HTMLElement, count: number } | null,
  *   pending: Map<string, HTMLElement>,
  *   questions: Map<string, HTMLElement>,
  *   transport: ChatTransport | null,
@@ -196,6 +201,7 @@ export const chat = {
   streaming: null,
   thinking: null,
   tools: new Map(),
+  lastTool: null,
   pending: new Map(),
   questions: new Map(),
   transport: null,

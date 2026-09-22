@@ -902,6 +902,47 @@ await checkEventually('texto depois de uma ferramenta abre bolha nova no fim do 
       && document.getElementById('chat-log').lastElementChild === bubbles[1];
   })()`)));
 
+// Acao igual, mesmo arquivo, logo em seguida: uma linha so com contador. Um
+// arquivo diferente abre linha nova.
+await board.evaluate(`(async () => {
+  const chat = await import('/app/chat.js');
+  chat.appendToolUse({ id: 'r1', name: 'Edit', input: { file_path: 'login.html' } });
+  chat.updateToolResult({ id: 'r1', ok: true, summary: 'gravado' });
+  chat.appendToolUse({ id: 'r2', name: 'Edit', input: { file_path: 'login.html' } });
+  chat.updateToolResult({ id: 'r2', ok: true, summary: 'gravado' });
+  chat.appendToolUse({ id: 'r3', name: 'Edit', input: { file_path: 'login.html' } });
+  chat.updateToolResult({ id: 'r3', ok: true, summary: 'gravado' });
+  chat.appendToolUse({ id: 'r4', name: 'Edit', input: { file_path: 'signup.html' } });
+  chat.updateToolResult({ id: 'r4', ok: true, summary: 'gravado' });
+})()`);
+
+await checkEventually('tres edits seguidos no mesmo arquivo viram um bloco com contador',
+  async () => await board.evaluate(`(() => {
+    const blocks = [...document.querySelectorAll('#chat-log .chat-tool')];
+    const repeated = blocks[blocks.length - 2];
+    const other = blocks[blocks.length - 1];
+    return repeated.querySelector('.chat-tool-count').textContent === '\u00d73'
+      && repeated.querySelector('.chat-tool-input').textContent.includes('login.html')
+      && !other.querySelector('.chat-tool-count')
+      && other.querySelector('.chat-tool-input').textContent.includes('signup.html');
+  })()`));
+
+// Bloco no meio quebra a sequencia: o Edit seguinte nao pode ser contado no
+// que ficou acima do texto.
+await board.evaluate(`(async () => {
+  const chat = await import('/app/chat.js');
+  chat.appendAssistantDelta('no meio');
+  chat.appendToolUse({ id: 'r5', name: 'Edit', input: { file_path: 'signup.html' } });
+})()`);
+
+await checkEventually('um bloco no meio quebra a aglomeracao',
+  async () => await board.evaluate(`(() => {
+    const blocks = [...document.querySelectorAll('#chat-log .chat-tool')];
+    const last = blocks[blocks.length - 1];
+    return !last.querySelector('.chat-tool-count')
+      && last.previousElementSibling.classList.contains('chat-msg');
+  })()`));
+
 /* ---------- Transporte da conversa ---------- */
 
 process.stdout.write('\nTransporte da conversa\n');

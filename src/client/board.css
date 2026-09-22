@@ -530,6 +530,14 @@ body {
   font-weight: 600;
 }
 
+/* O contador de uma acao repetida. Fica colado no nome porque e sobre ele que
+   fala: `Edit ×3` e uma acao so, contada. */
+.chat-tool-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-tool-input {
   flex: 1;
   min-width: 0;

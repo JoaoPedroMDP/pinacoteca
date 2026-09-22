@@ -29,6 +29,7 @@ import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
   clampSidebarWidth, normalizeQuestions, previewUrl, rectsOverlap, resizeZoneAt,
   resolveXPath, separateOverlaps, serializeCommentQueue, snapToGrid, sortNames,
+  toolTarget,
 } from '../src/client/utils.js';
 
 /* ---------- cli.js ---------- */
@@ -921,4 +922,19 @@ test('normalizeQuestions descarta o que o painel nao saberia desenhar', () => {
 test('normalizeQuestions devolve lista vazia para o que nao e lista', () => {
   assert.deepEqual(normalizeQuestions(undefined), []);
   assert.deepEqual(normalizeQuestions({ questions: [] }), []);
+});
+
+test('toolTarget acha o caminho em qualquer um dos campos de arquivo', () => {
+  assert.equal(toolTarget({ file_path: '/proto/login.html' }), '/proto/login.html');
+  assert.equal(toolTarget({ path: 'css/base.css' }), 'css/base.css');
+  assert.equal(toolTarget({ notebook_path: 'a.ipynb' }), 'a.ipynb');
+});
+
+test('toolTarget devolve vazio para entrada sem arquivo', () => {
+  assert.equal(toolTarget({ command: 'ls' }), '');
+  assert.equal(toolTarget({ file_path: '' }), '');
+  assert.equal(toolTarget({ file_path: 42 }), '');
+  assert.equal(toolTarget('login.html'), '');
+  assert.equal(toolTarget(null), '');
+  assert.equal(toolTarget(undefined), '');
 });

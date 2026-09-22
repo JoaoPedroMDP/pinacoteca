@@ -569,6 +569,34 @@ chamar o `appendBlock`, então o bloco recém-criado não se fecha sozinho. É o
 resposta continuar crescendo em streaming numa bolha só enquanto nada entra entre os
 deltas.
 
+#### Ação repetida é uma linha com contador
+
+Um agente que reescreve uma tela chama `Edit` no mesmo arquivo várias vezes seguidas, e
+cada chamada virava um bloco igual embaixo do outro — três linhas dizendo "Edit
+login.html" empurravam o resto do log para fora da coluna estreita da sidebar. Quando a
+ação seguinte é **a mesma tool no mesmo arquivo e logo em seguida**, ela não abre bloco
+novo: o bloco que já está lá ganha um contador (`×3`) e volta a "rodando".
+
+O alvo sai de `toolTarget` (`utils.js`, pura): os mesmos campos de caminho que
+`escapingPath` confere no servidor (`file_path`, `path`, `notebook_path`). **Entrada sem
+arquivo nunca aglomera** — dois `Bash` seguidos quase nunca são o mesmo comando, e contá-los
+juntos esconderia duas coisas diferentes numa linha só.
+
+"Logo em seguida" é o que `chat.lastTool` guarda, e ele segue a mesma regra do log linear:
+`appendBlock` o zera, então qualquer coisa que entre no meio — um texto do assistente, um
+diff de permissão, uma pergunta — quebra a sequência e o próximo `Edit` abre bloco novo. O
+log continua contando a história na ordem em que ela aconteceu; o que mudou é que a mesma
+frase repetida é dita uma vez, com quantas.
+
+O que se perde é a entrada de cada repetição, e o contador é o que paga por isso: o bloco
+sempre foi um resumo, e "mexeu três vezes neste arquivo" é o que o usuário precisa ver. A
+entrada mostrada continua a da **primeira** chamada — trocá-la pela última faria a linha
+mudar de texto embaixo de quem está lendo sem dizer mais nada.
+
+Limite conhecido: com duas chamadas da mesma tool no mesmo arquivo em paralelo, o resultado
+da primeira fecha o bloco em ok/erro enquanto a segunda ainda roda, e o estado visível é o
+da última a responder.
+
 Cada `iframe` começa com 1280px (referência de desktop), mas nem largura nem altura ficam
 fixas: no `load` de cada iframe o conteúdo real é medido (possível porque tudo é mesma
 origem) e o card se ajusta.

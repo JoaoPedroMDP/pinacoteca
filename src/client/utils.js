@@ -387,3 +387,32 @@ export function normalizeQuestions(raw) {
 
   return questions;
 }
+
+// Campos de entrada de tool que carregam caminho de arquivo. Mesma lista do
+// `PATH_FIELDS` de `agent.js`, por outro motivo: la eles sao o cadeado da raiz,
+// aqui sao a identidade do alvo.
+const TOOL_PATH_FIELDS = ['file_path', 'path', 'notebook_path'];
+
+/**
+ * O arquivo que a entrada de uma tool mira, ou `''` quando ela nao mira
+ * nenhum — e o caso do `Bash`, por exemplo.
+ *
+ * E o que o log usa para saber se duas acoes seguidas sao *a mesma coisa no
+ * mesmo arquivo* e podem virar uma linha so com contador. Sem alvo nao ha
+ * aglomeracao: dois `Bash` seguidos quase nunca sao o mesmo comando.
+ *
+ * Funcao pura.
+ *
+ * @param {unknown} input o campo `input` do evento `tool`, como veio do modelo
+ * @returns {string}
+ */
+export function toolTarget(input) {
+  if (typeof input !== 'object' || input === null) return '';
+  const source = /** @type {Record<string, unknown>} */ (input);
+
+  for (const field of TOOL_PATH_FIELDS) {
+    const value = source[field];
+    if (typeof value === 'string' && value !== '') return value;
+  }
+  return '';
+}

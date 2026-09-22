@@ -26,7 +26,7 @@ import {
   loadChatDraft, loadChatHistory, loadChatPrefs, pushChatHistory, saveChatDraft,
   saveChatPrefs,
 } from './storage.js';
-import { normalizeQuestions, serializeCommentQueue } from './utils.js';
+import { normalizeQuestions, serializeCommentQueue, toolTarget } from './utils.js';
 import { showToast } from './feedback.js';
 
 /* ---------- Elementos ---------- */
@@ -238,6 +238,7 @@ function makeBlock(className, text = '') {
 function appendBlock(node) {
   chat.streaming = null;
   chat.thinking = null;
+  chat.lastTool = null;
 
   keepPinned(() => {
     chatEmpty.hidden = true;
@@ -363,10 +364,63 @@ export function appendThinkingDelta(delta) {
 }
 
 /**
+ * Aglomera uma acao repetida no bloco que ja esta no fim do log, em vez de
+ * empilhar uma linha igual embaixo da outra.
+ *
+ * So aglomera o que e *a mesma tool no mesmo arquivo* e *logo em seguida*: o
+ * `chat.lastTool` vale enquanto aquele bloco for o ultimo do log, e qualquer
+ * outro bloco o zera (`appendBlock`). Tres `Edit` seguidos em `login.html`
+ * viram uma linha com `×3`; um `Edit` em outro arquivo, ou um texto do
+ * assistente no meio, abre linha nova — a historia continua na ordem em que
+ * aconteceu.
+ *
+ * O que se perde e a entrada de cada repeticao, e o contador e o que paga por
+ * isso: o bloco e um resumo do que o agente fez, e "mexeu tres vezes neste
+ * arquivo" e o que o usuario precisa ver. A entrada mostrada continua a da
+ * primeira — trocar pela ultima faria a linha mudar de texto embaixo de quem
+ * esta lendo, sem dizer mais nada.
+ *
+ * @param {string} id o id da chamada nova, que passa a achar o mesmo bloco
+ * @param {string} name
+ * @param {string} target o arquivo mirado; `''` nunca aglomera
+ * @returns {boolean} `true` quando a repeticao foi absorvida
+ */
+function repeatToolUse(id, name, target) {
+  const last = chat.lastTool;
+  if (!last || !target || last.name !== name || last.target !== target) return false;
+
+  last.count += 1;
+  const { block } = last;
+
+  keepPinned(() => {
+    block.classList.remove('is-ok', 'is-error');
+    block.classList.add('is-running');
+
+    let counter = block.querySelector('.chat-tool-count');
+    if (!counter) {
+      counter = makeBlock('chat-tool-count');
+      /** @type {HTMLElement} */ (block.querySelector('.chat-tool-name')).after(counter);
+    }
+    counter.textContent = `\u00d7${last.count}`;
+
+    const status = block.querySelector('.chat-tool-status');
+    if (status) status.textContent = 'rodando';
+  });
+
+  chat.tools.set(id, block);
+  return true;
+}
+
+/**
  * Bloco de uso de ferramenta, em estado "rodando" ate o resultado chegar.
+ * Repeticao da mesma tool no mesmo arquivo nao abre bloco novo: vira contador
+ * no anterior (veja `repeatToolUse`).
  * @param {{ id: string, name: string, input?: unknown }} tool
  */
 export function appendToolUse({ id, name, input: toolInput }) {
+  const target = toolTarget(toolInput);
+  if (repeatToolUse(id, name, target)) return;
+
   const block = makeBlock('chat-tool is-running');
   block.append(makeBlock('chat-tool-name', name));
 
@@ -376,6 +430,10 @@ export function appendToolUse({ id, name, input: toolInput }) {
 
   appendBlock(block);
   chat.tools.set(id, block);
+
+  // Depois do `appendBlock`, que zera o anterior: e este bloco que passa a ser
+  // o candidato a absorver a proxima acao igual.
+  chat.lastTool = target ? { name, target, block, count: 1 } : null;
 }
 
 /**
@@ -663,6 +721,7 @@ export function setTurnRunning(running) {
   // Turno novo, bolha nova: o proximo delta nao cai no texto do turno anterior.
   chat.streaming = null;
   chat.thinking = null;
+  chat.lastTool = null;
 
   if (running) return;
 
