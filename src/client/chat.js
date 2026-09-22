@@ -26,6 +26,7 @@ import {
   loadChatDraft, loadChatHistory, loadChatPrefs, pushChatHistory, saveChatDraft,
   saveChatPrefs,
 } from './storage.js';
+import { renderConversations } from './conversations.js';
 import { normalizeQuestions, serializeCommentQueue, toolTarget } from './utils.js';
 import { showToast } from './feedback.js';
 
@@ -301,7 +302,7 @@ function makeButton(label, className) {
  * @param {string} text
  * @returns {HTMLElement} a bolha montada
  */
-function appendUserMessage(text) {
+export function appendUserMessage(text) {
   const bubble = makeBlock('chat-msg is-user', text);
   appendBlock(bubble);
   chat.messages.push({ role: 'user', text, bubble });
@@ -454,26 +455,61 @@ export function updateToolResult({ id, ok, summary = '' }) {
 }
 
 /**
- * Resposta a um pedido de permissao: fecha o bloco e avisa o transporte.
+ * Fecha o bloco de uma permissao com um veredito, sem avisar ninguem.
  *
  * Pedido desconhecido (ja respondido, ou de um turno que saiu da tela) e
  * ignorado — o veredito so pode ser dado uma vez.
  *
  * @param {string} requestId
+ * @param {'approved' | 'rejected' | 'expired'} verdict
+ */
+function closePermission(requestId, verdict) {
+  const block = chat.pending.get(requestId);
+  if (!block) return false;
+  chat.pending.delete(requestId);
+
+  block.classList.add(`is-${verdict}`);
+  for (const button of block.querySelectorAll('button')) button.disabled = true;
+
+  const label = { approved: 'aprovado', rejected: 'rejeitado', expired: 'expirado' }[verdict];
+  const actions = block.querySelector('.chat-permission-actions');
+  if (actions) actions.append(makeBlock('chat-permission-verdict', label));
+  return true;
+}
+
+/**
+ * Resposta a um pedido de permissao: fecha o bloco e avisa o transporte.
+ *
+ * @param {string} requestId
  * @param {boolean} allow
  */
 export function resolvePermission(requestId, allow) {
-  const block = chat.pending.get(requestId);
-  if (!block) return;
-  chat.pending.delete(requestId);
-
-  block.classList.add(allow ? 'is-approved' : 'is-rejected');
-  for (const button of block.querySelectorAll('button')) button.disabled = true;
-
-  const actions = block.querySelector('.chat-permission-actions');
-  if (actions) actions.append(makeBlock('chat-permission-verdict', allow ? 'aprovado' : 'rejeitado'));
-
+  if (!closePermission(requestId, allow ? 'approved' : 'rejected')) return;
   chat.transport?.respondToPermission?.(requestId, allow);
+}
+
+/**
+ * Pinta no bloco o veredito que ja foi dado — o que o transcript guardou de um
+ * pedido respondido antes deste carregamento. Nao avisa o transporte: a
+ * resposta ja chegou ao agente quando ela foi dada.
+ *
+ * @param {string} requestId
+ * @param {boolean} allow
+ */
+export function markPermission(requestId, allow) {
+  closePermission(requestId, allow ? 'approved' : 'rejected');
+}
+
+/**
+ * O pedido nao tem mais para onde ir: o turno que o esperava acabou, e a
+ * promessa parada do outro lado morreu com ele. E o estado em que um pedido
+ * pendente reaparece quando a conversa e redesenhada de um transcript — deixar
+ * os botoes vivos prometeria uma resposta que nao chega mais a lugar nenhum.
+ *
+ * @param {string} requestId
+ */
+export function expirePermission(requestId) {
+  closePermission(requestId, 'expired');
 }
 
 /**
@@ -483,9 +519,13 @@ export function resolvePermission(requestId, allow) {
  * impossivel: o servidor le a configuracao uma vez, no comeco do turno, entao
  * ligar o automatico no meio de um turno deixa os pedidos daquele turno
  * chegando aqui — e e aqui que eles sao respondidos sozinhos.
- * @param {{ requestId: string, toolName: string, input?: unknown, diff?: string }} request
+ * @param {{ requestId: string, toolName: string, input?: unknown, diff?: string,
+ *   replay?: boolean }} request `replay` desenha o bloco de um transcript: nada
+ *   e respondido sozinho, porque o turno daquele pedido ja acabou
  */
-export function appendPermissionRequest({ requestId, toolName, input: toolInput, diff = '' }) {
+export function appendPermissionRequest({
+  requestId, toolName, input: toolInput, diff = '', replay = false,
+}) {
   const block = makeBlock('chat-permission');
 
   const header = makeBlock('chat-permission-header');
@@ -507,7 +547,7 @@ export function appendPermissionRequest({ requestId, toolName, input: toolInput,
   appendBlock(block);
   chat.pending.set(requestId, block);
 
-  if (chat.autoApprove) resolvePermission(requestId, true);
+  if (chat.autoApprove && !replay) resolvePermission(requestId, true);
 }
 
 /* ---------- Perguntas do agente ---------- */
@@ -599,7 +639,7 @@ function buildQuestionFields(question, item) {
  * @param {string} requestId
  * @param {string} verdict o que escrever no rodape do bloco
  */
-function closeQuestion(requestId, verdict) {
+export function closeQuestion(requestId, verdict) {
   const block = chat.questions.get(requestId);
   if (!block) return;
   chat.questions.delete(requestId);
@@ -640,13 +680,15 @@ function describeAnswers(fields, answers) {
  * evento em que nenhuma sobrou vira um bloco de erro, porque o turno do outro
  * lado esta parado esperando e o usuario precisa saber disso.
  *
- * @param {{ requestId: string, questions: unknown }} request
+ * @param {{ requestId: string, questions: unknown, replay?: boolean }} request
+ *   `replay` desenha o bloco de um transcript: ninguem e avisado, porque o
+ *   turno que esperava a resposta ja acabou
  */
-export function appendQuestionRequest({ requestId, questions: raw }) {
+export function appendQuestionRequest({ requestId, questions: raw, replay = false }) {
   const questions = normalizeQuestions(raw);
   if (questions.length === 0) {
     appendChatError('O agente fez uma pergunta que este board nao soube desenhar.');
-    chat.transport?.respondToQuestion?.(requestId, { allow: false, answers: {} });
+    if (!replay) chat.transport?.respondToQuestion?.(requestId, { allow: false, answers: {} });
     return;
   }
 
@@ -705,6 +747,30 @@ export function appendChatError(message) {
   appendBlock(makeBlock('chat-error', message));
 }
 
+/**
+ * Esvazia o log e esquece os blocos abertos: e o comeco de outra conversa, ou
+ * de uma conversa nova.
+ *
+ * O que fica de fora de proposito: o rascunho do compositor e o historico da
+ * seta pra cima, que sao do compositor daquela pasta, e nao de uma conversa —
+ * o texto que o usuario estava escrevendo nao some porque ele trocou de
+ * conversa.
+ */
+export function resetChatLog() {
+  for (const node of [...chatLog.children]) {
+    if (node !== chatEmpty) node.remove();
+  }
+  chatEmpty.hidden = false;
+
+  chat.messages = [];
+  chat.streaming = null;
+  chat.thinking = null;
+  chat.lastTool = null;
+  chat.tools.clear();
+  chat.pending.clear();
+  chat.questions.clear();
+}
+
 /* ---------- Estados do turno ---------- */
 
 /**
@@ -717,6 +783,8 @@ export function setTurnRunning(running) {
   chat.running = running;
   chatSend.hidden = running;
   chatStop.hidden = !running;
+  // Trocar de conversa no meio de um turno jogaria fora uma resposta ja paga.
+  renderConversations();
 
   // Turno novo, bolha nova: o proximo delta nao cai no texto do turno anterior.
   chat.streaming = null;

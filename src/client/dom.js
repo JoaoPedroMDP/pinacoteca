@@ -35,6 +35,13 @@ export const tabChat = required('tab-chat');
 
 /* ---------- Conversa ---------- */
 
+export const chatTabs = required('chat-tabs');
+export const chatPanel = required('chat-panel');
+export const chatConversations = required('chat-conversations');
+export const chatConversationsList = required('chat-conversations-list');
+export const chatConversationsEmpty = required('chat-conversations-empty');
+export const chatConversationsNote = required('chat-conversations-note');
+export const chatNew = /** @type {HTMLButtonElement} */ (required('chat-new'));
 export const chatLog = required('chat-log');
 export const chatEmpty = required('chat-empty');
 export const chatQueue = required('chat-queue');

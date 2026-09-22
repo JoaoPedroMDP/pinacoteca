@@ -47,6 +47,16 @@ import { readConfig } from './config.js';
  */
 
 /**
+ * O que o usuario respondeu a um pedido que estava parado. Este evento **nao**
+ * vai para o stream: ao vivo, quem pinta o veredito e o proprio clique do
+ * usuario. Ele existe para o transcript, que sem ele mostraria como pendente,
+ * no proximo carregamento, algo que ja foi respondido.
+ *
+ * @typedef {{ type: 'permission-result', requestId: string, allow: boolean,
+ *   answers: Record<string, unknown> }} PermissionResult
+ */
+
+/**
  * @typedef {object} Session
  * @property {string} id
  * @property {AbortController | null} controller turno em andamento, se houver
@@ -329,10 +339,11 @@ function waitForReply(session, requestId, signal) {
  * 3. o resto e a aprovacao de edicao de sempre.
  *
  * @param {{ session: Session, config: ChatConfig, rootDir: string,
- *          emit: (event: ChatEvent) => void }} params
+ *          emit: (event: ChatEvent) => void,
+ *          record: (event: PermissionResult) => void }} params
  * @returns {CanUseTool}
  */
-function permissionGate({ session, config, rootDir, emit }) {
+export function permissionGate({ session, config, rootDir, emit, record }) {
   return async (toolName, input, { signal }) => {
     // Antes de qualquer aprovacao: a raiz observada e o limite do agente.
     const outside = escapingPath(rootDir, input);
@@ -345,6 +356,7 @@ function permissionGate({ session, config, rootDir, emit }) {
       emit({ type: 'question', requestId, questions: questionsOf(input) });
 
       const reply = await waitForReply(session, requestId, signal);
+      record({ type: 'permission-result', requestId, allow: reply.allow, answers: reply.answers });
       return reply.allow
         ? { behavior: 'allow', updatedInput: answeredInput(input, reply.answers) }
         : { behavior: 'deny', message: 'O usuario nao respondeu a pergunta.' };
@@ -356,6 +368,7 @@ function permissionGate({ session, config, rootDir, emit }) {
     emit({ type: 'permission', requestId, toolName, input, diff: buildDiff(toolName, input) });
 
     const reply = await waitForReply(session, requestId, signal);
+    record({ type: 'permission-result', requestId, allow: reply.allow, answers: {} });
     return reply.allow
       ? { behavior: 'allow', updatedInput: input }
       : { behavior: 'deny', message: 'O usuario recusou esta acao.' };
@@ -572,11 +585,16 @@ function buildOptions({ rootDir, config, isNew, sessionId, controller, canUseToo
  * exatamente um evento `done`, para o cliente poder fechar o balao sem contar
  * casos.
  *
+ * `onRecord` recebe o que so tem sentido no transcript — hoje, o veredito de um
+ * pedido de permissao ou de uma pergunta. Quem guarda isso e o chamador; daqui
+ * so sai o aviso de que aconteceu.
+ *
  * @param {{ rootDir: string, sessionId: string | null, text: string,
- *          onEvent: (event: ChatEvent) => void }} params
+ *          onEvent: (event: ChatEvent) => void,
+ *          onRecord?: (event: PermissionResult) => void }} params
  * @returns {Promise<void>}
  */
-export async function runTurn({ rootDir, sessionId, text, onEvent }) {
+export async function runTurn({ rootDir, sessionId, text, onEvent, onRecord }) {
   let done = false;
   /** @param {ChatEvent} event */
   const emit = (event) => {
@@ -607,7 +625,9 @@ export async function runTurn({ rootDir, sessionId, text, onEvent }) {
       prompt: text,
       options: buildOptions({
         rootDir, config, isNew, sessionId: id, controller,
-        canUseTool: permissionGate({ session, config, rootDir, emit }),
+        canUseTool: permissionGate({
+          session, config, rootDir, emit, record: onRecord ?? (() => {}),
+        }),
       }),
     });
     for await (const message of stream) {

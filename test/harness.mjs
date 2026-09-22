@@ -125,7 +125,8 @@ export function createFixture() {
  * Sobe o servidor de verdade e um Chrome headless apontado para ele.
  *
  * @param {{ dir: string, port: number, cdpPort: number, chromeBinary: string }} options
- * @returns {Promise<{ evaluate: (expression: string) => Promise<any>, stop: () => void }>}
+ * @returns {Promise<{ evaluate: (expression: string) => Promise<any>,
+ *   reload: () => Promise<void>, stop: () => void }>}
  */
 export async function startBoard({ dir, port, cdpPort, chromeBinary }) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'pinacoteca-chrome-'));
@@ -181,6 +182,21 @@ export async function startBoard({ dir, port, cdpPort, chromeBinary }) {
     return message.result.result.value;
   }
 
+  /**
+   * Recarrega a pagina e espera o board ficar de pe de novo.
+   *
+   * O `setTimeout` e para a avaliacao voltar antes da navegacao: pedir o reload
+   * dentro da propria expressao mataria o contexto antes da resposta chegar, e
+   * o `evaluate` ficaria pendurado.
+   */
+  async function reload() {
+    await evaluate('setTimeout(() => location.reload(), 0)');
+    const back = await waitFor(async () => (
+      await evaluate("document.readyState === 'complete' && !!document.getElementById('chat-tabs')")
+    ));
+    if (!back) throw new Error('A pagina nao voltou depois do reload');
+  }
+
   function stop() {
     socket.close();
     chrome.kill();
@@ -192,7 +208,7 @@ export async function startBoard({ dir, port, cdpPort, chromeBinary }) {
     }
   }
 
-  return { evaluate, stop };
+  return { evaluate, reload, stop };
 }
 
 /**

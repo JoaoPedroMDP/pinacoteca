@@ -11,11 +11,15 @@
 
 import {
   appendChatError, appendAssistantDelta, appendPermissionRequest, appendQuestionRequest,
-  appendThinkingDelta, appendToolUse, applyServerConfig, setAutoApprove, setSessionId,
+  appendThinkingDelta, appendToolUse, appendUserMessage, applyServerConfig, closeQuestion,
+  expirePermission, markPermission, resetChatLog, setAutoApprove, setSessionId,
   setTransport, setTurnRunning, updateToolResult,
 } from './chat.js';
+import { renderConversations } from './conversations.js';
 import { setHasAmbientCredential, setHasKey } from './settings.js';
 import { chat } from './state.js';
+import { loadOpenConversation, saveOpenConversation } from './storage.js';
+import { showTab } from './tabs.js';
 
 /** Rotas da conversa. O servidor so aceita `POST` embaixo deste prefixo. */
 const CHAT_API = '/api/chat';
@@ -98,6 +102,18 @@ function asObject(value) {
 }
 
 /**
+ * Passa a tratar `sessionId` como a conversa aberta: o estado, a marca no
+ * `localStorage` e a lista, que so entao sabe qual linha esta aberta.
+ *
+ * @param {string | null} sessionId
+ */
+function openHere(sessionId) {
+  setSessionId(sessionId);
+  saveOpenConversation(sessionId ?? '');
+  renderConversations();
+}
+
+/**
  * Leva um evento do servidor para o modulo que desenha.
  *
  * `done` e `error` sao os unicos que destravam a interface — quem liga o turno
@@ -108,7 +124,7 @@ function asObject(value) {
 function applyEvent(event) {
   switch (event.type) {
     case 'session':
-      setSessionId(asText(event.sessionId));
+      openHere(asText(event.sessionId));
       break;
 
     case 'text':
@@ -212,6 +228,105 @@ async function readStream(response) {
   return sawDone;
 }
 
+/* ---------- Replay do transcript ---------- */
+
+/**
+ * O que o usuario respondeu a cada pedido, pelo transcript. Sem isso um pedido
+ * ja aprovado voltaria pendente na tela.
+ *
+ * @param {RawEvent[]} events
+ * @returns {Map<string, { allow: boolean, answers: Record<string, unknown> }>}
+ */
+function permissionResults(events) {
+  /** @type {Map<string, { allow: boolean, answers: Record<string, unknown> }>} */
+  const results = new Map();
+
+  for (const event of events) {
+    if (event.type !== 'permission-result') continue;
+    results.set(asText(event.requestId), {
+      allow: event.allow === true,
+      answers: asObject(event.answers),
+    });
+  }
+  return results;
+}
+
+/**
+ * O rodape de uma pergunta ja respondida, montado do que ficou gravado.
+ *
+ * @param {{ allow: boolean, answers: Record<string, unknown> }} result
+ * @returns {string}
+ */
+function answeredVerdict(result) {
+  if (!result.allow) return 'cancelado';
+
+  const lines = Object.entries(result.answers)
+    .filter(([, value]) => typeof value === 'string' && value !== '')
+    .map(([question, value]) => `${question}: ${value}`);
+
+  return lines.join('\n') || 'respondido';
+}
+
+/**
+ * Redesenha um evento gravado.
+ *
+ * Ele passa pelos mesmos desenhadores do stream ao vivo — dois caminhos de
+ * desenho divergiriam no primeiro bloco novo. O que muda e so o que nao faz
+ * sentido fora do turno: nada e respondido sozinho, nada e mandado ao servidor,
+ * e o pedido que ficou sem resposta volta expirado, porque o turno que o
+ * esperava acabou faz tempo.
+ *
+ * @param {RawEvent} event
+ * @param {Map<string, { allow: boolean, answers: Record<string, unknown> }>} results
+ */
+function replayEvent(event, results) {
+  const requestId = asText(event.requestId);
+  const result = results.get(requestId);
+
+  switch (event.type) {
+    case 'user':
+      appendUserMessage(asText(event.text));
+      break;
+
+    case 'permission':
+      appendPermissionRequest({
+        requestId,
+        toolName: asText(event.toolName),
+        input: event.input,
+        diff: asText(event.diff),
+        replay: true,
+      });
+      if (result) markPermission(requestId, result.allow);
+      else expirePermission(requestId);
+      break;
+
+    case 'question':
+      appendQuestionRequest({ requestId, questions: event.questions, replay: true });
+      closeQuestion(requestId, result ? answeredVerdict(result) : 'o turno terminou sem resposta');
+      break;
+
+    // `done`, `session` e `permission-result` nao tem o que desenhar: o turno
+    // deles ja acabou, a sessao veio da propria rota e o veredito ja foi
+    // pintado no bloco acima.
+    case 'done':
+    case 'session':
+    case 'permission-result':
+      break;
+
+    default:
+      applyEvent(event);
+  }
+}
+
+/**
+ * Redesenha a conversa inteira a partir do que o servidor gravou.
+ * @param {RawEvent[]} events
+ */
+function replay(events) {
+  const results = permissionResults(events);
+  for (const event of events) replayEvent(event, results);
+}
+
 /* ---------- Requisicoes ---------- */
 
 /**
@@ -286,6 +401,9 @@ async function runTurn(text) {
     setTurnRunning(false);
   } finally {
     if (turn === controller) turn = null;
+    // O turno mudou a conversa: ela pode ter acabado de nascer, mudado de
+    // titulo ou subido para o topo da lista.
+    void loadConversations();
   }
 }
 
@@ -346,6 +464,96 @@ function respondToQuestion(requestId, { allow, answers }) {
   postJson('/permission', { sessionId: chat.sessionId, requestId, allow, answers })
     .then(async (response) => {
       if (!response.ok) appendChatError(await failureMessage(response));
+    })
+    .catch((error) => appendChatError(describeError(error)));
+}
+
+/* ---------- Conversas gravadas ---------- */
+
+/**
+ * Relê a lista de conversas desta pasta e redesenha a subaba `Conversas`.
+ *
+ * Falha de rede aqui nao vira bloco de erro no log: a lista e um painel
+ * lateral, e derrubar a conversa aberta por causa dela seria pior do que
+ * mostra-la desatualizada.
+ *
+ * @returns {Promise<void>}
+ */
+async function loadConversations() {
+  try {
+    const response = await fetch(`${CHAT_API}/conversations`);
+    if (!response.ok) return;
+
+    const body = asObject(await response.json());
+    chat.conversations = Array.isArray(body.conversations) ? body.conversations : [];
+    renderConversations();
+  } catch {
+    // Servidor fora do ar: a lista fica como estava.
+  }
+}
+
+/**
+ * Abre a conversa `id`: troca o log pelo transcript dela e vai para o `Chat`.
+ *
+ * @param {string} id
+ * @param {{ quiet?: boolean }} [options] `quiet` e a restauracao da carga —
+ *   conversa que sumiu do disco nao e erro do usuario, e so uma marca velha
+ * @returns {Promise<boolean>} conseguiu abrir?
+ */
+async function openConversation(id, { quiet = false } = {}) {
+  /** @type {Response} */
+  let response;
+  try {
+    response = await fetch(`${CHAT_API}/conversations/${encodeURIComponent(id)}`);
+  } catch (error) {
+    if (!quiet) appendChatError(describeError(error));
+    return false;
+  }
+
+  if (!response.ok) {
+    // Conversa apagada por outra aba: a marca no navegador e que esta velha.
+    if (response.status === 404) saveOpenConversation('');
+    else if (!quiet) appendChatError(await failureMessage(response));
+    return false;
+  }
+
+  const body = asObject(await response.json());
+  resetChatLog();
+  replay(Array.isArray(body.events) ? /** @type {RawEvent[]} */ (body.events) : []);
+  openHere(asText(body.sessionId) || id);
+  showTab('chat', 'chat');
+  return true;
+}
+
+/**
+ * Comeca uma conversa do zero: log vazio e nenhuma sessao. Ela so passa a
+ * existir no disco quando a primeira mensagem for enviada — ate la nao ha
+ * transcript nenhum para listar.
+ */
+function newConversation() {
+  resetChatLog();
+  openHere(null);
+  showTab('chat', 'chat');
+}
+
+/**
+ * Apaga uma conversa gravada. Se era a aberta, o `Chat` fica vazio: o que ele
+ * mostrava nao existe mais.
+ *
+ * @param {string} id
+ */
+function removeConversation(id) {
+  postJson('/conversations/delete', { id })
+    .then(async (response) => {
+      if (!response.ok) {
+        appendChatError(await failureMessage(response));
+        return;
+      }
+      if (chat.sessionId === id) {
+        resetChatLog();
+        openHere(null);
+      }
+      await loadConversations();
     })
     .catch((error) => appendChatError(describeError(error)));
 }
@@ -429,5 +637,18 @@ export async function connectChat() {
     // inicial. Nao ha nada a fazer aqui alem de nao quebrar a carga.
   }
 
-  setTransport({ send, stop, respondToPermission, respondToQuestion, saveKey, saveConfig });
+  setTransport({
+    send, stop, respondToPermission, respondToQuestion, saveKey, saveConfig,
+    openConversation: (id) => void openConversation(id),
+    newConversation,
+    deleteConversation: removeConversation,
+  });
+
+  await loadConversations();
+
+  // Havia uma conversa aberta nesta pasta: ela volta como estava, na subaba
+  // `Chat`. Sem conversa nenhuma — primeira vez aqui, ou a ultima foi apagada —
+  // a aba abre na lista, que e onde se escolhe ou se comeca uma.
+  const openId = loadOpenConversation();
+  if (!openId || !(await openConversation(openId, { quiet: true }))) showTab('chat', 'list');
 }

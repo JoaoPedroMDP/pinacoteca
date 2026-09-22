@@ -253,6 +253,43 @@ export function pushChatHistory(text) {
   }
 }
 
+// Qual conversa esta aberta e por raiz observada, como as posicoes e o
+// rascunho: o *conteudo* das conversas mora no servidor, mas qual delas se esta
+// olhando e do navegador — duas janelas abertas na mesma pasta podem estar em
+// conversas diferentes sem uma arrastar a outra.
+const CHAT_OPEN_KEY_PREFIX = 'pinacoteca:chat-open:';
+
+/** @returns {string} */
+function chatOpenKey() {
+  return `${CHAT_OPEN_KEY_PREFIX}${source.root}`;
+}
+
+/**
+ * Id da conversa aberta nesta raiz.
+ * @returns {string} vazio quando nenhuma esta aberta
+ */
+export function loadOpenConversation() {
+  try {
+    return localStorage.getItem(chatOpenKey()) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Grava qual conversa esta aberta. String vazia apaga a marca — e o que uma
+ * conversa nova, ainda sem sessao, deixa gravado.
+ * @param {string} id
+ */
+export function saveOpenConversation(id) {
+  try {
+    if (id) localStorage.setItem(chatOpenKey(), id);
+    else localStorage.removeItem(chatOpenKey());
+  } catch {
+    // Sem espaco ou sem permissao: segue funcionando, so nao lembra.
+  }
+}
+
 // As preferencias do painel de conversa sao preferencia do navegador, como o
 // snap-to-grid: modelo, esforco e o atalho de envio nao mudam de pasta pra
 // pasta, entao uma chave so serve todo board aberto nele.

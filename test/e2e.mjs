@@ -14,6 +14,7 @@ import path from 'node:path';
 import {
   check, checkEventually, createFixture, findChrome, report, startBoard,
 } from './harness.mjs';
+import { historyDir } from '../src/server/history.js';
 
 // A configuracao da conversa (chave da API inclusa) mora em
 // `~/.config/pinacoteca`. O teste grava uma chave falsa nela, entao o XDG e
@@ -748,6 +749,31 @@ process.stdout.write('\nConversa\n');
 
 await board.evaluate("document.querySelector('[data-tab=\"chat\"]').click()");
 
+/* ---------- Subabas da conversa ---------- */
+
+const chatSubtab = () => board.evaluate(
+  "document.querySelector('#chat-tabs [aria-selected=\"true\"]').dataset.chatTab");
+const listVisible = async () => !(await board.evaluate(
+  "document.getElementById('chat-conversations').hidden"));
+const panelVisible = async () => !(await board.evaluate(
+  "document.getElementById('chat-panel').hidden"));
+/** @type {(name: string) => Promise<any>} */
+const showSubtab = (name) => board.evaluate(
+  `document.querySelector('#chat-tabs [data-chat-tab="${name}"]').click()`);
+
+// A pasta de teste nasce sem conversa gravada nenhuma, entao a aba Conversa
+// abre onde se escolhe uma, e nao num log vazio.
+check('sem conversa gravada, a aba abre na subaba Conversas', (await chatSubtab()) === 'list');
+check('e a lista aparece no lugar do compositor',
+  (await listVisible()) && !(await panelVisible()));
+check('a lista vazia explica como comecar', await board.evaluate(
+  "!document.getElementById('chat-conversations-empty').hidden"));
+
+await showSubtab('chat');
+check('clicar em Chat mostra o log e esconde a lista',
+  (await panelVisible()) && !(await listVisible()));
+check('e a subaba Chat fica marcada selecionada', (await chatSubtab()) === 'chat');
+
 /**
  * Digita caractere a caractere, como o compositor ve o usuario escrevendo: e o
  * evento `input` que alimenta o auto-crescimento e a pilha de desfazer.
@@ -853,6 +879,15 @@ const oneLine = await composerHeight();
 await type('a\nb\nc\nd\ne');
 await checkEventually('o compositor cresce com varias linhas',
   async () => (await composerHeight()) > oneLine);
+await clearComposer();
+
+// Trocar de subaba nao pode custar o que o usuario estava escrevendo: o
+// rascunho e do compositor daquela pasta, e nao de uma conversa.
+await type('rascunho que nao pode sumir');
+await showSubtab('list');
+await showSubtab('chat');
+check('o rascunho sobrevive a ida e volta entre as subabas',
+  (await composerValue()) === 'rascunho que nao pode sumir');
 await clearComposer();
 
 // Os blocos do log so aparecem quando o transporte existe, e ele e da tarefa
@@ -962,166 +997,67 @@ const sessionId = () => board.evaluate("import('/app/state.js').then((m) => m.ch
 check('sem chave nem sessao logada, a rota nao aponta credencial de ambiente',
   (await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasAmbientCredential === false);
 
-// A modal comeca fechada; o icone de engrenagem no rodape do sidebar a abre.
-check('a modal de configuracoes comeca fechada', !(await settingsOpen()));
-await board.evaluate("document.getElementById('settings-open').click()");
-check('o icone de engrenagem abre a modal', await settingsOpen());
-check('a modal abre na categoria General', await board.evaluate(
-  "!document.getElementById('settings-panel-general').hidden "
-  + "&& document.getElementById('settings-panel-models').hidden"));
+/* ---------- Transcript da conversa ---------- */
 
-// Trocar para Models > Claude mostra o campo de chave, sempre visivel — sem
-// fold, diferente do painel antigo da aba Conversa.
-await board.evaluate("document.querySelector('[data-category=\"models\"]').click()");
-check('sem credencial de ambiente, o aviso de sessao fica escondido',
-  await board.evaluate("document.getElementById('chat-credential-note').hidden"));
-check('sem chave e sem sessao, o campo de chave fica sempre a vista', await keyFieldVisible());
+// Sem chave configurada, o turno morre no comeco, com um erro — e e justamente
+// por isso que ele serve aqui: exercita o caminho inteiro da gravacao (abrir o
+// arquivo, registrar a mensagem do usuario, fechar no `done`) sem chamar a API
+// da Anthropic. O historico mora no `XDG_CONFIG_HOME` temporario deste teste.
+const chatApi = `http://localhost:${PORT}/api/chat`;
 
-// `setHasAmbientCredential` (agora em `settings.js`) e a mesma funcao que
-// `chat-client.js` chama com o que a rota devolveu — aqui ela e exercitada
-// direto, simulando a maquina que tem uma sessao do Claude Code mas nenhuma
-// chave gravada na pinacoteca.
-await board.evaluate(
-  "import('/app/settings.js').then((m) => m.setHasAmbientCredential(true))");
-check('sessao detectada acende o aviso mesmo sem chave', await board.evaluate(
-  "!document.getElementById('chat-credential-note').hidden "
-  + "&& document.getElementById('chat-credential-note').textContent.length > 0"));
-check('e o campo de chave continua a vista, sem fold', await keyFieldVisible());
-
-await board.evaluate(
-  "import('/app/settings.js').then((m) => m.setHasAmbientCredential(false))");
-check('tirar a sessao apaga o aviso', await board.evaluate(
-  "document.getElementById('chat-credential-note').hidden"));
-check('e o campo de chave continua a vista sem a sessao', await keyFieldVisible());
-
-// Fechar a modal (controle explicito) nao afeta o resto da interface.
-await board.evaluate("document.getElementById('settings-close').click()");
-check('o controle de fechar fecha a modal', !(await settingsOpen()));
-
-// Clique fora do conteudo (no `<dialog>`, fora do wrapper interno) fecha a
-// modal tambem.
-await board.evaluate("document.getElementById('settings-open').click()");
-await board.evaluate(
-  "document.getElementById('settings-dialog').dispatchEvent(new MouseEvent('click'))");
-check('clicar fora do conteudo fecha a modal', !(await settingsOpen()));
-
-// A chave falsa vai pela propria interface: e o caminho que o usuario percorre,
-// e e ele que exercita `saveKey`. Nenhuma chamada a API da Anthropic acontece —
-// so a gravacao no `XDG_CONFIG_HOME` temporario.
-await board.evaluate("document.getElementById('settings-open').click()");
-await board.evaluate("document.querySelector('[data-category=\"models\"]').click()");
-await board.evaluate(`(() => {
-  const input = document.getElementById('chat-key-input');
-  input.value = 'sk-ant-teste-falsa';
-  document.getElementById('chat-key-save').click();
-})()`);
-
-await checkEventually('o servidor passa a responder que tem chave', async () => (
-  await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasKey === true);
-check('o campo de chave continua a vista mesmo com chave gravada', await keyFieldVisible());
-await board.evaluate("document.getElementById('settings-close').click()");
-
-// O parser de SSE, sozinho: comentario ignorado, varias linhas `data:` do mesmo
-// evento juntadas e o bloco sem terminador guardado para o proximo pedaco.
-const parsed = JSON.parse(await board.evaluate(`(async () => {
-  const { parseSseChunk } = await import('/app/chat-client.js');
-  const first = parseSseChunk('', ': batimento\\ndata: {"a":1}\\n\\ndata: linha1\\ndata: linha2\\n\\ndata: {"b"');
-  const second = parseSseChunk(first.rest, ':2}\\n\\n');
-  return JSON.stringify({ first, second });
-})()`));
-
-check('o parser junta varias linhas data: do mesmo evento',
-  parsed.first.events.length === 2 && parsed.first.events[1] === 'linha1\nlinha2');
-check('o parser ignora comentario e guarda o evento cortado no fim do pedaco',
-  parsed.first.events[0] === '{"a":1}' && parsed.first.rest === 'data: {"b"');
-check('o evento cortado fecha no pedaco seguinte',
-  parsed.second.events.length === 1 && parsed.second.events[0] === '{"b":2}');
-
-/**
- * Troca o `fetch` da pagina por um que responde `/api/chat/message` com um
- * stream forjado. E o unico jeito de exercitar o turno inteiro sem chamar a API
- * da Anthropic de verdade.
- * @param {string[]} chunks pedacos crus do corpo, na ordem
- */
-const fakeStream = (chunks) => board.evaluate(`(() => {
-  const real = window.__realFetch || window.fetch;
-  window.__realFetch = real;
-  window.fetch = (url, options) => {
-    if (String(url).includes('/api/chat/message')) {
-      const encoder = new TextEncoder();
-      const parts = ${JSON.stringify(chunks)};
-      const body = new ReadableStream({
-        start(controller) {
-          for (const part of parts) controller.enqueue(encoder.encode(part));
-          controller.close();
-        },
-      });
-      return Promise.resolve(new Response(body, { status: 200 }));
-    }
-    return real(url, options);
-  };
-})()`);
-
-const restoreFetch = () => board.evaluate(
-  '(() => { if (window.__realFetch) window.fetch = window.__realFetch; })()');
-
-await fakeStream([
-  'data: {"type":"session","sessionId":"sessao-1"}\n\n',
-  ': batimento\ndata: {"type":"text","delta":"res"}\n\n',
-  'data: {"type":"text","delta":"posta ',
-  'do agente"}\n\ndata: {"type":"tool","id":"t9","name":"Write","input":{"file_path":"novo.html"}}\n\n',
-  'data: {"type":"tool-result","id":"t9","ok":true,"summary":"criado"}\n\n',
-  'data: {"type":"done","stopReason":"end_turn"}\n\n',
-]);
-
-await type('faca algo');
-await press('Enter');
-
-await checkEventually('o stream monta a resposta do assistente',
-  async () => (await lastAssistant()) === 'resposta do agente');
-check('a sessao devolvida pelo servidor e guardada', (await sessionId()) === 'sessao-1');
-check('o bloco da ferramenta do stream fecha em ok',
-  (await lastOf('#chat-log .chat-tool.is-ok .chat-tool-status')) === 'criado');
-await checkEventually('o `done` destrava o botao Parar', async () => !(await stopVisible()));
-
-// Servidor caido no meio do turno: sem `done`, a interface tem de destravar
-// mesmo assim — botao Parar preso e a pior falha possivel aqui.
-const errorsBefore = await errorCount();
-await fakeStream(['data: {"type":"text","delta":"cortado"}\n\n']);
-await type('de novo');
-await press('Enter');
-
-await checkEventually('stream cortado sem `done` vira erro no log',
-  async () => (await errorCount()) === errorsBefore + 1);
-await checkEventually('e destrava o botao Parar do mesmo jeito',
-  async () => !(await stopVisible()));
-
-await restoreFetch();
-
-// A configuracao do servidor manda: ela vem do disco, e dois navegadores
-// abertos na mesma pinacoteca tem de ver a mesma escolha. O `localStorage`
-// daqui e so o que se mostra ate a resposta chegar.
-await board.evaluate(`(() => {
-  localStorage.setItem('pinacoteca:chat-prefs', JSON.stringify({
-    model: 'claude-opus-5', effort: 'max', sendOnEnter: true,
-  }));
-})()`);
-await fetch(`http://localhost:${PORT}/api/chat/config`, {
+/** @type {(route: string, body: unknown) => Promise<Response>} */
+const postChat = (route, body) => fetch(`${chatApi}${route}`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ model: 'claude-sonnet-5', effort: 'low', sendOnEnter: false }),
+  body: JSON.stringify(body),
 });
 
-await board.evaluate("import('/app/chat-client.js').then((m) => m.connectChat())");
-await checkEventually('a config do servidor vence o localStorage nos seletores', async () => (
-  await board.evaluate(
-    "document.getElementById('chat-model').value === 'claude-sonnet-5'"
-    + " && document.getElementById('chat-effort').value === 'low'"
-    + " && document.getElementById('chat-send-mode').getAttribute('aria-pressed') === 'true'")));
-check('e o localStorage passa a mostrar o que o servidor disse', await board.evaluate(
-  "JSON.parse(localStorage.getItem('pinacoteca:chat-prefs')).effort === 'low'"));
+const conversationList = async () => (await (await fetch(`${chatApi}/conversations`)).json()).conversations;
 
-await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
+// A lista ja pode ter o que as secoes anteriores conversaram, entao o que se
+// afere aqui e sempre a *entrada desta* conversa, nunca o tamanho da lista.
+/** @type {(list: any[], id: string) => any} */
+const entryOf = (list, id) => list.find((entry) => entry.id === id);
+const listBefore = await conversationList();
+check('a lista de conversas vem como lista', Array.isArray(listBefore));
+
+const turnBody = await (await postChat('/message', { text: 'grave este turno' })).text();
+const recordedSession = (turnBody.match(/"sessionId":"([^"]+)"/) || [])[1];
+check('o turno sem chave termina em erro e em `done`',
+  turnBody.includes('"type":"error"') && turnBody.includes('"type":"done"'));
+
+await checkEventually('a conversa aparece na lista, com o titulo da primeira mensagem', async () => {
+  const entry = entryOf(await conversationList(), recordedSession);
+  return entry?.title === 'grave este turno' && entry.messageCount === 1;
+});
+check('e ela entra no topo, como a mais recente',
+  (await conversationList())[0].id === recordedSession);
+
+const recorded = await (await fetch(`${chatApi}/conversations/${recordedSession}`)).json();
+const recordedTypes = recorded.events.map(/** @param {any} event */ (event) => event.type);
+check('o transcript guarda a mensagem do usuario, o erro e o fim do turno',
+  recordedTypes.join(',') === 'user,error,done', recordedTypes.join(','));
+check('e a mensagem gravada e a que foi mandada',
+  recorded.events[0].text === 'grave este turno' && recorded.sessionId === recordedSession);
+check('a sessao nao vira linha do transcript: ela ja e o nome do arquivo',
+  !recordedTypes.includes('session'));
+
+check('conversa que nao existe responde 404',
+  (await fetch(`${chatApi}/conversations/sessao-que-nao-existe`)).status === 404);
+
+// Um segundo turno na mesma sessao continua o mesmo arquivo, em vez de abrir
+// outro — e o que faz a conversa ser uma so entre recarregamentos.
+await postChat('/message', { sessionId: recordedSession, text: 'segunda mensagem' });
+await checkEventually('o turno seguinte continua a mesma conversa', async () => {
+  const list = await conversationList();
+  return list.length === listBefore.length + 1 && entryOf(list, recordedSession)?.messageCount === 2;
+});
+
+check('apagar responde que apagou',
+  (await (await postChat('/conversations/delete', { id: recordedSession })).json()).ok === true);
+check('a conversa apagada some da lista', !entryOf(await conversationList(), recordedSession));
+check('e pedi-la depois responde 404',
+  (await fetch(`${chatApi}/conversations/${recordedSession}`)).status === 404);
 
 /* ---------- Fila de comentarios em modo ponteiro ---------- */
 
@@ -1652,6 +1588,330 @@ await checkEventually('Reorganizar depois de um preset global devolve o tamanho 
     const sizes = await allSizes();
     return sizes.length > 1 && sizes.every((s) => s.width <= 1280);
   });
+
+/* ---------- Conversas: lista, replay e troca ----------
+
+   Esta secao vai por ultimo de proposito: ela recarrega a pagina, e um reload
+   no meio da suite apagaria o estado que as secoes seguintes montaram (fila de
+   comentarios, modo ponteiro, posicoes). */
+
+// Daqui pra frente a conversa e de verdade: a mensagem sai da interface, passa
+// pelo servidor e volta gravada. A chave falsa gravada la atras sai antes, para
+// o turno morrer aqui mesmo, sem nenhuma chamada a API da Anthropic — o que se
+// afere e a persistencia, nao a resposta do modelo.
+await fetch(`${chatApi}/config`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ apiKey: '' }),
+});
+await board.evaluate("import('/app/chat-client.js').then((m) => m.connectChat())");
+
+/** @type {() => Promise<Array<{ id: string, title: string, open: boolean, disabled: boolean }>>} */
+const conversationRows = () => board.evaluate(
+  "[...document.querySelectorAll('.chat-conversation')].map((row) => ({"
+  + " id: row.dataset.id,"
+  + " title: row.querySelector('.chat-conversation-title').textContent,"
+  + " open: row.classList.contains('is-open'),"
+  + " disabled: row.querySelector('.chat-conversation-open').disabled }))");
+const logText = () => board.evaluate("document.getElementById('chat-log').textContent");
+
+/** @type {(text: string) => Promise<void>} */
+const sendForReal = async (text) => {
+  await showSubtab('chat');
+  await clearComposer();
+  await type(text);
+  await press('Enter');
+  await checkEventually(`o turno de "${text}" termina`, async () => !(await stopVisible()));
+};
+
+await board.evaluate("document.getElementById('chat-new').click()");
+await sendForReal('primeira conversa de verdade');
+
+await checkEventually('a conversa enviada pela interface entra na lista, marcada como aberta',
+  async () => {
+    const rows = await conversationRows();
+    return rows.some((row) => row.title === 'primeira conversa de verdade' && row.open);
+  });
+
+const firstId = await board.evaluate("import('/app/state.js').then((m) => m.chat.sessionId)");
+
+// Recarregar e o motivo de tudo isto existir.
+await board.reload();
+await board.evaluate("document.querySelector('[data-tab=\"chat\"]').click()");
+
+await checkEventually('depois do reload a aba volta na subaba Chat', async () => (await chatSubtab()) === 'chat');
+await checkEventually('e a conversa volta com a mensagem que foi mandada',
+  async () => (await logText()).includes('primeira conversa de verdade'));
+check('a sessao volta com ela, para o agente continuar de onde parou',
+  (await board.evaluate("import('/app/state.js').then((m) => m.chat.sessionId)")) === firstId);
+check('o replay nao liga turno nenhum', !(await stopVisible()));
+
+// Conversa nova: log vazio, sem sessao, e nada na lista ate a primeira mensagem.
+await showSubtab('list');
+const rowsBeforeNew = (await conversationRows()).length;
+await board.evaluate("document.getElementById('chat-new').click()");
+check('a conversa nova abre o Chat vazio e sem sessao',
+  (await panelVisible())
+  && !(await logText()).includes('primeira conversa de verdade')
+  && (await board.evaluate("import('/app/state.js').then((m) => m.chat.sessionId)")) === null);
+await showSubtab('list');
+check('e conversa vazia nao entra na lista', (await conversationRows()).length === rowsBeforeNew);
+
+await sendForReal('segunda conversa de verdade');
+await checkEventually('a segunda conversa entra na lista', async () => (
+  (await conversationRows()).some((row) => row.title === 'segunda conversa de verdade')));
+
+// Voltar para a primeira nao pode misturar as duas.
+await showSubtab('list');
+await board.evaluate(
+  `[...document.querySelectorAll('.chat-conversation')]
+    .find((row) => row.dataset.id === ${JSON.stringify(firstId)})
+    .querySelector('.chat-conversation-open').click()`);
+
+await checkEventually('abrir outra conversa troca o log inteiro', async () => {
+  const text = await logText();
+  return text.includes('primeira conversa de verdade') && !text.includes('segunda conversa de verdade');
+});
+check('e a subaba volta para o Chat', (await chatSubtab()) === 'chat');
+
+// Turno em andamento: a lista fica olhavel e intocavel.
+await board.evaluate("import('/app/chat.js').then((m) => m.setTurnRunning(true))");
+await showSubtab('list');
+check('com um turno rodando, a lista aparece mas nao responde',
+  (await conversationRows()).every((row) => row.disabled)
+  && (await board.evaluate("document.getElementById('chat-new').disabled"))
+  && !(await board.evaluate("document.getElementById('chat-conversations-note').hidden")));
+
+await board.evaluate("import('/app/chat.js').then((m) => m.setTurnRunning(false))");
+check('e volta a responder quando o turno termina',
+  (await conversationRows()).every((row) => !row.disabled)
+  && !(await board.evaluate("document.getElementById('chat-new').disabled")));
+
+// Apagar: a confirmacao e trocada por um "sim" automatico, senao o dialogo
+// nativo trava o headless.
+await board.evaluate('window.confirm = () => true');
+await board.evaluate(
+  `[...document.querySelectorAll('.chat-conversation')]
+    .find((row) => row.dataset.id === ${JSON.stringify(firstId)})
+    .querySelector('.chat-conversation-delete').click()`);
+
+await checkEventually('apagar tira a conversa da lista', async () => (
+  !(await conversationRows()).some((row) => row.id === firstId)));
+await checkEventually('e esvazia o Chat, que mostrava justamente ela', async () => (
+  !(await logText()).includes('primeira conversa de verdade')
+  && (await board.evaluate("import('/app/state.js').then((m) => m.chat.sessionId)")) === null));
+check('a conversa apagada some do disco tambem',
+  (await fetch(`${chatApi}/conversations/${firstId}`)).status === 404);
+
+// Pedido de permissao e pergunta que ficaram sem resposta: o transcript e
+// escrito na mao porque provoca-los de verdade exigiria o modelo do outro lado.
+// O que importa e como eles voltam — visiveis, e sem nada clicavel, porque o
+// turno que esperava por eles acabou.
+const pendingLines = [
+  { type: 'user', text: 'conversa com pedidos pendurados' },
+  { type: 'permission', requestId: 'p-respondida', toolName: 'Write', input: { file_path: 'a.html' }, diff: '+novo' },
+  { type: 'permission-result', requestId: 'p-respondida', allow: true, answers: {} },
+  { type: 'permission', requestId: 'p-pendente', toolName: 'Edit', input: { file_path: 'b.html' }, diff: '-velho' },
+  { type: 'question', requestId: 'q-pendente', questions: [{ question: 'Qual paleta?', options: [{ label: 'clara' }] }] },
+  { type: 'done', stopReason: 'end_turn' },
+].map((event) => JSON.stringify(event)).join('\n');
+
+fs.mkdirSync(historyDir(fixture.dir), { recursive: true });
+fs.writeFileSync(path.join(historyDir(fixture.dir), 'sessao-pendurada.jsonl'), `${pendingLines}\n`);
+
+await board.evaluate("import('/app/chat-client.js').then((m) => m.connectChat())");
+await checkEventually('a conversa escrita em disco aparece na lista', async () => (
+  (await conversationRows()).some((row) => row.id === 'sessao-pendurada')));
+
+await showSubtab('list');
+await board.evaluate(
+  `[...document.querySelectorAll('.chat-conversation')]
+    .find((row) => row.dataset.id === 'sessao-pendurada')
+    .querySelector('.chat-conversation-open').click()`);
+
+await checkEventually('o pedido ja respondido volta com o veredito que teve', async () => (
+  await board.evaluate(`(() => {
+    const block = document.querySelector('#chat-log .chat-permission.is-approved');
+    return !!block && block.querySelector('.chat-permission-verdict').textContent === 'aprovado';
+  })()`)));
+
+check('o pedido que ficou sem resposta volta expirado e sem botao vivo',
+  await board.evaluate(`(() => {
+    const block = document.querySelector('#chat-log .chat-permission.is-expired');
+    return !!block
+      && block.querySelector('.chat-permission-verdict').textContent === 'expirado'
+      && [...block.querySelectorAll('button')].every((button) => button.disabled);
+  })()`));
+
+check('a pergunta sem resposta volta encerrada, dizendo por que',
+  await board.evaluate(`(() => {
+    const block = document.querySelector('#chat-log .chat-question.is-answered');
+    return !!block
+      && block.querySelector('.chat-question-verdict').textContent.includes('sem resposta')
+      && [...block.querySelectorAll('button, input')].every((field) => field.disabled);
+  })()`));
+
+// A modal comeca fechada; o icone de engrenagem no rodape do sidebar a abre.
+check('a modal de configuracoes comeca fechada', !(await settingsOpen()));
+await board.evaluate("document.getElementById('settings-open').click()");
+check('o icone de engrenagem abre a modal', await settingsOpen());
+check('a modal abre na categoria General', await board.evaluate(
+  "!document.getElementById('settings-panel-general').hidden "
+  + "&& document.getElementById('settings-panel-models').hidden"));
+
+// Trocar para Models > Claude mostra o campo de chave, sempre visivel — sem
+// fold, diferente do painel antigo da aba Conversa.
+await board.evaluate("document.querySelector('[data-category=\"models\"]').click()");
+check('sem credencial de ambiente, o aviso de sessao fica escondido',
+  await board.evaluate("document.getElementById('chat-credential-note').hidden"));
+check('sem chave e sem sessao, o campo de chave fica sempre a vista', await keyFieldVisible());
+
+// `setHasAmbientCredential` (agora em `settings.js`) e a mesma funcao que
+// `chat-client.js` chama com o que a rota devolveu — aqui ela e exercitada
+// direto, simulando a maquina que tem uma sessao do Claude Code mas nenhuma
+// chave gravada na pinacoteca.
+await board.evaluate(
+  "import('/app/settings.js').then((m) => m.setHasAmbientCredential(true))");
+check('sessao detectada acende o aviso mesmo sem chave', await board.evaluate(
+  "!document.getElementById('chat-credential-note').hidden "
+  + "&& document.getElementById('chat-credential-note').textContent.length > 0"));
+check('e o campo de chave continua a vista, sem fold', await keyFieldVisible());
+
+await board.evaluate(
+  "import('/app/settings.js').then((m) => m.setHasAmbientCredential(false))");
+check('tirar a sessao apaga o aviso', await board.evaluate(
+  "document.getElementById('chat-credential-note').hidden"));
+check('e o campo de chave continua a vista sem a sessao', await keyFieldVisible());
+
+// Fechar a modal (controle explicito) nao afeta o resto da interface.
+await board.evaluate("document.getElementById('settings-close').click()");
+check('o controle de fechar fecha a modal', !(await settingsOpen()));
+
+// Clique fora do conteudo (no `<dialog>`, fora do wrapper interno) fecha a
+// modal tambem.
+await board.evaluate("document.getElementById('settings-open').click()");
+await board.evaluate(
+  "document.getElementById('settings-dialog').dispatchEvent(new MouseEvent('click'))");
+check('clicar fora do conteudo fecha a modal', !(await settingsOpen()));
+
+// A chave falsa vai pela propria interface: e o caminho que o usuario percorre,
+// e e ele que exercita `saveKey`. Nenhuma chamada a API da Anthropic acontece —
+// so a gravacao no `XDG_CONFIG_HOME` temporario.
+await board.evaluate("document.getElementById('settings-open').click()");
+await board.evaluate("document.querySelector('[data-category=\"models\"]').click()");
+await board.evaluate(`(() => {
+  const input = document.getElementById('chat-key-input');
+  input.value = 'sk-ant-teste-falsa';
+  document.getElementById('chat-key-save').click();
+})()`);
+
+await checkEventually('o servidor passa a responder que tem chave', async () => (
+  await (await fetch(`http://localhost:${PORT}/api/chat/config`)).json()).hasKey === true);
+check('o campo de chave continua a vista mesmo com chave gravada', await keyFieldVisible());
+await board.evaluate("document.getElementById('settings-close').click()");
+
+// O parser de SSE, sozinho: comentario ignorado, varias linhas `data:` do mesmo
+// evento juntadas e o bloco sem terminador guardado para o proximo pedaco.
+const parsed = JSON.parse(await board.evaluate(`(async () => {
+  const { parseSseChunk } = await import('/app/chat-client.js');
+  const first = parseSseChunk('', ': batimento\\ndata: {"a":1}\\n\\ndata: linha1\\ndata: linha2\\n\\ndata: {"b"');
+  const second = parseSseChunk(first.rest, ':2}\\n\\n');
+  return JSON.stringify({ first, second });
+})()`));
+
+check('o parser junta varias linhas data: do mesmo evento',
+  parsed.first.events.length === 2 && parsed.first.events[1] === 'linha1\nlinha2');
+check('o parser ignora comentario e guarda o evento cortado no fim do pedaco',
+  parsed.first.events[0] === '{"a":1}' && parsed.first.rest === 'data: {"b"');
+check('o evento cortado fecha no pedaco seguinte',
+  parsed.second.events.length === 1 && parsed.second.events[0] === '{"b":2}');
+
+/**
+ * Troca o `fetch` da pagina por um que responde `/api/chat/message` com um
+ * stream forjado. E o unico jeito de exercitar o turno inteiro sem chamar a API
+ * da Anthropic de verdade.
+ * @param {string[]} chunks pedacos crus do corpo, na ordem
+ */
+const fakeStream = (chunks) => board.evaluate(`(() => {
+  const real = window.__realFetch || window.fetch;
+  window.__realFetch = real;
+  window.fetch = (url, options) => {
+    if (String(url).includes('/api/chat/message')) {
+      const encoder = new TextEncoder();
+      const parts = ${JSON.stringify(chunks)};
+      const body = new ReadableStream({
+        start(controller) {
+          for (const part of parts) controller.enqueue(encoder.encode(part));
+          controller.close();
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    }
+    return real(url, options);
+  };
+})()`);
+
+const restoreFetch = () => board.evaluate(
+  '(() => { if (window.__realFetch) window.fetch = window.__realFetch; })()');
+
+await fakeStream([
+  'data: {"type":"session","sessionId":"sessao-1"}\n\n',
+  ': batimento\ndata: {"type":"text","delta":"res"}\n\n',
+  'data: {"type":"text","delta":"posta ',
+  'do agente"}\n\ndata: {"type":"tool","id":"t9","name":"Write","input":{"file_path":"novo.html"}}\n\n',
+  'data: {"type":"tool-result","id":"t9","ok":true,"summary":"criado"}\n\n',
+  'data: {"type":"done","stopReason":"end_turn"}\n\n',
+]);
+
+await type('faca algo');
+await press('Enter');
+
+await checkEventually('o stream monta a resposta do assistente',
+  async () => (await lastAssistant()) === 'resposta do agente');
+check('a sessao devolvida pelo servidor e guardada', (await sessionId()) === 'sessao-1');
+check('o bloco da ferramenta do stream fecha em ok',
+  (await lastOf('#chat-log .chat-tool.is-ok .chat-tool-status')) === 'criado');
+await checkEventually('o `done` destrava o botao Parar', async () => !(await stopVisible()));
+
+// Servidor caido no meio do turno: sem `done`, a interface tem de destravar
+// mesmo assim — botao Parar preso e a pior falha possivel aqui.
+const errorsBefore = await errorCount();
+await fakeStream(['data: {"type":"text","delta":"cortado"}\n\n']);
+await type('de novo');
+await press('Enter');
+
+await checkEventually('stream cortado sem `done` vira erro no log',
+  async () => (await errorCount()) === errorsBefore + 1);
+await checkEventually('e destrava o botao Parar do mesmo jeito',
+  async () => !(await stopVisible()));
+
+await restoreFetch();
+
+// A configuracao do servidor manda: ela vem do disco, e dois navegadores
+// abertos na mesma pinacoteca tem de ver a mesma escolha. O `localStorage`
+// daqui e so o que se mostra ate a resposta chegar.
+await board.evaluate(`(() => {
+  localStorage.setItem('pinacoteca:chat-prefs', JSON.stringify({
+    model: 'claude-opus-5', effort: 'max', sendOnEnter: true,
+  }));
+})()`);
+await fetch(`http://localhost:${PORT}/api/chat/config`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ model: 'claude-sonnet-5', effort: 'low', sendOnEnter: false }),
+});
+
+await board.evaluate("import('/app/chat-client.js').then((m) => m.connectChat())");
+await checkEventually('a config do servidor vence o localStorage nos seletores', async () => (
+  await board.evaluate(
+    "document.getElementById('chat-model').value === 'claude-sonnet-5'"
+    + " && document.getElementById('chat-effort').value === 'low'"
+    + " && document.getElementById('chat-send-mode').getAttribute('aria-pressed') === 'true'")));
+check('e o localStorage passa a mostrar o que o servidor disse', await board.evaluate(
+  "JSON.parse(localStorage.getItem('pinacoteca:chat-prefs')).effort === 'low'"));
+
+await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
+
 
 /* ---------- Servidor ---------- */
 

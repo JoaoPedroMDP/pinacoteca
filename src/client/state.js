@@ -92,6 +92,8 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   ate o proximo evento chegar.
  * - `activeTab`: qual painel da sidebar esta visivel — a arvore de telas ou a
  *   conversa. Trocado por `tabs.js`.
+ * - `activeChatTab`: dentro da conversa, qual subaba esta visivel — a lista de
+ *   conversas gravadas ou a conversa aberta. Trocado pelo mesmo `tabs.js`.
  *
  * @type {{
  *   mode: 'pan' | 'pointer',
@@ -102,6 +104,7 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   snapToGrid: boolean,
  *   lastChangedFiles: string[],
  *   activeTab: 'screens' | 'chat',
+ *   activeChatTab: 'list' | 'chat',
  *   sidebarWidth: number,
  * }}
  */
@@ -114,6 +117,7 @@ export const ui = {
   snapToGrid: false,
   lastChangedFiles: [],
   activeTab: 'screens',
+  activeChatTab: 'chat',
   // Largura em px ja validada. Zero ate `board.js` aplicar a largura salva.
   sidebarWidth: 0,
 };
@@ -147,6 +151,17 @@ export const ui = {
  * @property {(apiKey: string) => void} [saveKey] grava a chave no servidor
  * @property {(config: { model: string, effort: string, sendOnEnter: boolean,
  *   autoApprove: boolean }) => void} [saveConfig]
+ * @property {(id: string) => void} [openConversation] troca a conversa aberta
+ *   pela gravada com esse id, redesenhando o log com o transcript dela
+ * @property {() => void} [newConversation] comeca uma conversa do zero
+ * @property {(id: string) => void} [deleteConversation] apaga uma conversa gravada
+ */
+
+/**
+ * Uma conversa gravada, como a subaba `Conversas` a mostra. Espelha o que
+ * `GET /api/chat/conversations` devolve (veja `history.js`, no servidor).
+ *
+ * @typedef {{ id: string, title: string, updatedAt: number, messageCount: number }} ConversationSummary
  */
 
 /**
@@ -162,6 +177,9 @@ export const ui = {
  * - `hasKey`: o servidor ja tem uma chave gravada. Ver `settings.js` para
  *   onde isso e mostrado (subcategoria Claude, dentro da modal de
  *   Configuracoes).
+ * - `conversations`: as conversas gravadas desta raiz, da mais recente para a
+ *   mais antiga, como o servidor as devolveu. E a lista da subaba `Conversas`;
+ *   quem esta aberta se sabe pelo `sessionId`.
  * - `messages`: as bolhas montadas, na ordem em que entraram no log.
  * - `streaming`: a bolha de assistente que esta crescendo, ou `null` entre
  *   turnos. `thinking` e o corpo do bloco de raciocinio do mesmo turno.
@@ -176,6 +194,7 @@ export const ui = {
  *
  * @type {{
  *   sessionId: string | null,
+ *   conversations: ConversationSummary[],
  *   running: boolean,
  *   autoApprove: boolean,
  *   hasKey: boolean,
@@ -193,6 +212,7 @@ export const ui = {
  */
 export const chat = {
   sessionId: null,
+  conversations: [],
   running: false,
   autoApprove: false,
   hasKey: false,

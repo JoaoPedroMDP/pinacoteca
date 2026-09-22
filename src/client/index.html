@@ -24,42 +24,62 @@
     </div>
 
     <div id="tab-chat" role="tabpanel" aria-labelledby="sidebar-tab-chat" hidden>
-      <div id="chat-log">
-        <p id="chat-empty" class="muted">Ainda nao ha mensagens.</p>
+      <div id="chat-tabs" role="tablist">
+        <button type="button" class="chat-tab" role="tab" data-chat-tab="list"
+          id="chat-tab-list" aria-selected="false" aria-controls="chat-conversations">Conversas</button>
+        <button type="button" class="chat-tab" role="tab" data-chat-tab="chat"
+          id="chat-tab-chat" aria-selected="true" aria-controls="chat-panel">Chat</button>
       </div>
 
-      <div id="chat-queue" class="chat-queue" hidden>
-        <p class="chat-queue-title">A enviar</p>
-        <div id="chat-queue-list"></div>
-      </div>
-
-      <form id="chat-composer">
-        <textarea id="chat-input" placeholder="Peça algo ao agente..." rows="1"></textarea>
-        <div class="chat-composer-row">
-          <select id="chat-model">
-            <option value="claude-opus-5">claude-opus-5</option>
-            <option value="claude-sonnet-5">claude-sonnet-5</option>
-            <option value="claude-haiku-4-5">claude-haiku-4-5</option>
-          </select>
-          <select id="chat-effort">
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-            <option value="xhigh">xhigh</option>
-            <option value="max">max</option>
-          </select>
-          <select id="chat-auto" title="Aprovacao das edicoes">
-            <option value="manual">Manual</option>
-            <option value="auto">Auto</option>
-          </select>
-          <button type="button" id="chat-stop" hidden>Parar</button>
-          <span class="chat-send-wrap">
-            <button type="submit" id="chat-send">Enviar</button>
-            <button type="button" id="chat-send-mode" aria-pressed="false"
-              title="Shift+Enter para enviar (clique para alternar)">⇧⏎</button>
-          </span>
+      <div id="chat-conversations" role="tabpanel" aria-labelledby="chat-tab-list" hidden>
+        <div class="chat-conversations-head">
+          <button type="button" id="chat-new">Nova conversa</button>
+          <p id="chat-conversations-note" class="muted" hidden></p>
         </div>
-      </form>
+        <div id="chat-conversations-list"></div>
+        <p id="chat-conversations-empty" class="muted">
+          Nenhuma conversa nesta pasta ainda. Comece uma em "Nova conversa".
+        </p>
+      </div>
+
+      <div id="chat-panel" role="tabpanel" aria-labelledby="chat-tab-chat">
+        <div id="chat-log">
+          <p id="chat-empty" class="muted">Ainda nao ha mensagens.</p>
+        </div>
+
+        <div id="chat-queue" class="chat-queue" hidden>
+          <p class="chat-queue-title">A enviar</p>
+          <div id="chat-queue-list"></div>
+        </div>
+
+        <form id="chat-composer">
+          <textarea id="chat-input" placeholder="Peça algo ao agente..." rows="1"></textarea>
+          <div class="chat-composer-row">
+            <select id="chat-model">
+              <option value="claude-opus-5">claude-opus-5</option>
+              <option value="claude-sonnet-5">claude-sonnet-5</option>
+              <option value="claude-haiku-4-5">claude-haiku-4-5</option>
+            </select>
+            <select id="chat-effort">
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+              <option value="max">max</option>
+            </select>
+            <select id="chat-auto" title="Aprovacao das edicoes">
+              <option value="manual">Manual</option>
+              <option value="auto">Auto</option>
+            </select>
+            <button type="button" id="chat-stop" hidden>Parar</button>
+            <span class="chat-send-wrap">
+              <button type="submit" id="chat-send">Enviar</button>
+              <button type="button" id="chat-send-mode" aria-pressed="false"
+                title="Shift+Enter para enviar (clique para alternar)">⇧⏎</button>
+            </span>
+          </div>
+        </form>
+      </div>
     </div>
 
     <footer class="sidebar-footer">

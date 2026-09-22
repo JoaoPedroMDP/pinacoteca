@@ -31,6 +31,7 @@ import { connectEvents } from './sse.js';
 import { setSidebarWidth, setSnapToGrid } from './controls.js'; // tambem registra os listeners
 import { showTab } from './tabs.js'; // tambem registra o listener das abas
 import { initChat } from './chat.js';
+import { initConversations } from './conversations.js';
 import { connectChat } from './chat-client.js';
 import { initSettings } from './settings.js';
 
@@ -64,11 +65,12 @@ setSnapToGrid(loadSnapToGrid());
 // Antes de qualquer medida: `fitToScreen` enquadra pela largura do viewport, e
 // o viewport e o que sobra depois da sidebar.
 setSidebarWidth(loadSidebarWidth() || SIDEBAR_DEFAULT_WIDTH);
-showTab('screens');
+showTab('sidebar', 'screens');
 await loadScreens();
 // Depois da carga de proposito: o rascunho e o historico da conversa sao por
 // raiz observada, e a raiz so e conhecida a partir de `/api/screens`.
 initChat();
+initConversations();
 initSettings();
 // Depois do `initChat`/`initSettings`: `connectChat` pinta na interface o que
 // o servidor sabe (se ha chave, se a aprovacao e automatica), e os dois

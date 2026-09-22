@@ -18,12 +18,17 @@ import { mimeTypeFor, resolveInside } from '../src/server/http.js';
 import { isForbiddenPreviewPath, isHtmlFile, isIgnoredDir, listScreens } from '../src/server/screens.js';
 import { DEFAULT_CONFIG, mergeConfig, publicConfig } from '../src/server/config.js';
 import {
+  coalesce, conversationTitle, deleteConversation, historyDir, historySlug, messageCount,
+  openConversation, readConversation, readIndex,
+} from '../src/server/history.js';
+import {
   agentEnv, answeredInput, buildDiff, escapingPath, hasAmbientCredential, hasCredential,
-  hasKeychainCredential, translateMessage,
+  hasKeychainCredential, permissionGate, resolvePermission, translateMessage,
 } from '../src/server/agent.js';
 import { commentQueue, source } from '../src/client/state.js';
 import {
-  loadChatHistory, loadChatPrefs, pushChatHistory, loadChatDraft, saveChatDraft,
+  loadChatHistory, loadChatPrefs, loadOpenConversation, pushChatHistory, loadChatDraft,
+  saveChatDraft, saveOpenConversation,
 } from '../src/client/storage.js';
 import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
@@ -189,6 +194,234 @@ test('publicConfig troca a chave por hasKey', () => {
   assert.equal(publicConfig(mergeConfig(undefined, undefined)).hasKey, false);
 });
 
+/* ---------- server/history.js ----------
+
+   A gravacao mexe em disco, entao cada teste aponta `XDG_CONFIG_HOME` para uma
+   pasta temporaria: `configDir()` le a variavel na hora da chamada, e assim
+   nenhum teste escreve no `~/.config` de quem roda. */
+
+/**
+ * Manda o historico para uma pasta temporaria e devolve a raiz observada de
+ * mentira que os testes usam.
+ * @returns {string}
+ */
+function useHistoryHome() {
+  process.env.XDG_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'pinacoteca-history-'));
+  return '/tmp/proto';
+}
+
+test('historySlug junta o nome da pasta a um hash do caminho', () => {
+  const slug = historySlug('/home/ana/protos');
+  assert.match(slug, /^protos-[0-9a-f]{8}$/);
+  // Mesmo nome em lugares diferentes nao pode cair na mesma pasta.
+  assert.notEqual(slug, historySlug('/home/bia/protos'));
+  assert.equal(slug, historySlug('/home/ana/protos'));
+});
+
+test('historySlug troca o que nao e nome de pasta seguro', () => {
+  assert.match(historySlug('/home/ana/meus protos (1)'), /^meus-protos-1-[0-9a-f]{8}$/);
+  assert.match(historySlug('/'), /^[0-9a-f]{8}$/);
+});
+
+test('coalesce junta deltas seguidos do mesmo tipo', () => {
+  const events = coalesce([
+    { type: 'user', text: 'oi' },
+    { type: 'thinking', delta: 'pen' },
+    { type: 'thinking', delta: 'sando' },
+    { type: 'text', delta: 'um' },
+    { type: 'text', delta: ' dois' },
+    { type: 'done', stopReason: 'end_turn' },
+  ]);
+  assert.deepEqual(events, [
+    { type: 'user', text: 'oi' },
+    { type: 'thinking', delta: 'pensando' },
+    { type: 'text', delta: 'um dois' },
+    { type: 'done', stopReason: 'end_turn' },
+  ]);
+});
+
+test('coalesce nao junta blocos separados por outro evento', () => {
+  const events = coalesce([
+    { type: 'text', delta: 'antes' },
+    { type: 'tool', id: 't1', name: 'Read', input: { file_path: '/tmp/a.html' } },
+    { type: 'text', delta: 'depois' },
+  ]);
+  assert.equal(events.length, 3);
+  assert.deepEqual(events.map((event) => event.type), ['text', 'tool', 'text']);
+});
+
+test('coalesce aceita delta unico e lista vazia', () => {
+  assert.deepEqual(coalesce([]), []);
+  assert.deepEqual(coalesce([{ type: 'text', delta: 'so' }]), [{ type: 'text', delta: 'so' }]);
+});
+
+test('coalesce descarta a sessao e apara entrada de tool e diff', () => {
+  const events = coalesce([
+    { type: 'session', sessionId: 'abc' },
+    { type: 'tool', id: 't1', name: 'Write', input: { content: 'x'.repeat(500) } },
+    {
+      type: 'permission',
+      requestId: 'r1',
+      toolName: 'Write',
+      input: { content: 'y'.repeat(500) },
+      diff: Array.from({ length: 80 }, (_, index) => `+linha ${index}`).join('\n'),
+    },
+  ]);
+
+  assert.equal(events.length, 2, 'a sessao nao vai para o disco: ela ja e o nome do arquivo');
+  const tool = /** @type {any} */ (events[0]);
+  assert.equal(tool.input.content.length, 141, 'cortado no teto, com a reticencia');
+  const permission = /** @type {any} */ (events[1]);
+  assert.equal(permission.input.content.length, 141);
+  assert.equal(permission.diff.split('\n').length, 41);
+});
+
+test('conversationTitle e messageCount olham so o que o usuario disse', () => {
+  /** @type {any[]} */
+  const events = [
+    { type: 'user', text: '  fazer   uma\nlanding  ' },
+    { type: 'text', delta: 'ok' },
+    { type: 'user', text: 'agora o rodape' },
+  ];
+  assert.equal(conversationTitle(events), 'fazer uma landing');
+  assert.equal(messageCount(events), 2);
+  assert.equal(conversationTitle([{ type: 'text', delta: 'nada' }]), '');
+  assert.equal(messageCount([]), 0);
+});
+
+test('openConversation grava o turno coalescido e relê pelo readConversation', async () => {
+  const root = useHistoryHome();
+
+  const writer = openConversation(root, 'sessao-1');
+  writer.record({ type: 'user', text: 'oi' });
+  writer.record({ type: 'text', delta: 'um' });
+  writer.record({ type: 'text', delta: ' dois' });
+  writer.record({ type: 'done', stopReason: 'end_turn' });
+  await writer.close();
+
+  const events = await readConversation(root, 'sessao-1');
+  assert.deepEqual(events, [
+    { type: 'user', text: 'oi' },
+    { type: 'text', delta: 'um dois' },
+    { type: 'done', stopReason: 'end_turn' },
+  ]);
+
+  const dir = historyDir(root);
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700, 'a pasta guarda o que foi dito');
+  assert.equal(fs.statSync(path.join(dir, 'sessao-1.jsonl')).mode & 0o777, 0o600);
+});
+
+test('openConversation continua o arquivo no turno seguinte', async () => {
+  const root = useHistoryHome();
+
+  const first = openConversation(root, 'sessao-1');
+  first.record({ type: 'user', text: 'oi' });
+  await first.close();
+
+  const second = openConversation(root, 'sessao-1');
+  second.record({ type: 'user', text: 'de novo' });
+  await second.close();
+
+  const events = (await readConversation(root, 'sessao-1')) ?? [];
+  assert.deepEqual(events.map((event) => /** @type {any} */ (event).text), ['oi', 'de novo']);
+});
+
+test('readConversation descarta linha estragada e nao acha id inexistente', async () => {
+  const root = useHistoryHome();
+
+  const writer = openConversation(root, 'sessao-1');
+  writer.record({ type: 'user', text: 'oi' });
+  await writer.close();
+
+  const file = path.join(historyDir(root), 'sessao-1.jsonl');
+  fs.appendFileSync(file, '{isso nao e json}\n');
+  fs.appendFileSync(file, `${JSON.stringify({ type: 'done', stopReason: 'end_turn' })}\n`);
+
+  const events = (await readConversation(root, 'sessao-1')) ?? [];
+  assert.deepEqual(events.map((event) => event.type), ['user', 'done']);
+  assert.equal(await readConversation(root, 'nao-existe'), null);
+  assert.equal(await readConversation(root, '../fuga'), null, 'id nao pode sair da pasta');
+});
+
+test('readIndex ordena da mais recente para a mais antiga', async () => {
+  const root = useHistoryHome();
+
+  const older = openConversation(root, 'sessao-antiga');
+  older.record({ type: 'user', text: 'primeira conversa' });
+  await older.close();
+
+  const newer = openConversation(root, 'sessao-nova');
+  newer.record({ type: 'user', text: 'segunda conversa' });
+  await newer.close();
+
+  // O mtime tem resolucao de milissegundo: sem isso as duas empatariam.
+  const file = path.join(historyDir(root), 'sessao-nova.jsonl');
+  const future = new Date(Date.now() + 5_000);
+  fs.utimesSync(file, future, future);
+
+  const list = await readIndex(root);
+  assert.deepEqual(list.map((entry) => entry.id), ['sessao-nova', 'sessao-antiga']);
+  assert.equal(list[0].title, 'segunda conversa');
+  assert.equal(list[0].messageCount, 1);
+});
+
+test('readIndex sobrevive a indice estragado e a pasta que nao existe', async () => {
+  const root = useHistoryHome();
+  assert.deepEqual(await readIndex(root), [], 'pasta ainda nao criada');
+
+  const writer = openConversation(root, 'sessao-1');
+  writer.record({ type: 'user', text: 'a conversa' });
+  await writer.close();
+
+  fs.writeFileSync(path.join(historyDir(root), 'index.json'), '{ nao e json');
+
+  const list = await readIndex(root);
+  assert.equal(list.length, 1, 'o indice e cache: os arquivos continuam sendo a verdade');
+  assert.equal(list[0].title, 'a conversa');
+});
+
+test('readIndex ignora conversa em que ninguem falou', async () => {
+  const root = useHistoryHome();
+
+  const writer = openConversation(root, 'sessao-vazia');
+  writer.record({ type: 'error', message: 'nenhuma chave configurada' });
+  await writer.close();
+
+  assert.deepEqual(await readIndex(root), []);
+});
+
+test('deleteConversation apaga o transcript e tira da lista', async () => {
+  const root = useHistoryHome();
+
+  const writer = openConversation(root, 'sessao-1');
+  writer.record({ type: 'user', text: 'oi' });
+  await writer.close();
+
+  assert.equal(await deleteConversation(root, 'sessao-1'), true);
+  assert.deepEqual(await readIndex(root), []);
+  assert.equal(await readConversation(root, 'sessao-1'), null);
+  assert.equal(await deleteConversation(root, 'sessao-1'), false, 'nao havia o que apagar');
+});
+
+test('o arquivo de uma conversa para de crescer', async () => {
+  const root = useHistoryHome();
+  const file = path.join(historyDir(root), 'sessao-1.jsonl');
+
+  // Cada turno escreve ~200 KB; o teto e 2 MB.
+  for (let turn = 0; turn < 20; turn += 1) {
+    const writer = openConversation(root, 'sessao-1');
+    writer.record({ type: 'user', text: `turno ${turn}` });
+    writer.record({ type: 'text', delta: 'x'.repeat(200_000) });
+    await writer.close();
+  }
+
+  assert.ok(fs.statSync(file).size <= 3 * 1024 * 1024, 'o corte segura o tamanho');
+  const events = (await readConversation(root, 'sessao-1')) ?? [];
+  assert.ok(events.length > 0, 'o que sobrou continua legivel');
+  assert.equal(events[0].type, 'truncated', 'a marca de corte fica no lugar do que saiu');
+  assert.equal(/** @type {any} */ (events[events.length - 1]).text, undefined);
+});
+
 /* ---------- server/agent.js ---------- */
 
 test('buildDiff mostra o conteudo novo de um Write', () => {
@@ -291,6 +524,94 @@ test('translateMessage fecha o turno com done e avisa o resultado de erro', () =
 
 test('translateMessage ignora mensagem que nao interessa ao board', () => {
   assert.deepEqual(translateMessage(/** @type {any} */ ({ type: 'system', subtype: 'init' })), []);
+});
+
+/* ---------- server/agent.js: o veredito no transcript ---------- */
+
+/**
+ * Roda o `canUseTool` de uma sessao de mentira e responde o pedido que ele
+ * publicar. Devolve o que foi para o stream, o que foi para o transcript e o
+ * que a tool recebeu de volta.
+ *
+ * @param {{ toolName: string, input: Record<string, unknown>, allow: boolean,
+ *   answers?: Record<string, unknown>, autoApprove?: boolean }} scenario
+ */
+async function runGate({ toolName, input, allow, answers = {}, autoApprove = false }) {
+  /** @type {any} */
+  const session = { id: 'sessao-1', controller: null, pending: new Map() };
+  /** @type {any[]} */
+  const emitted = [];
+  /** @type {any[]} */
+  const recorded = [];
+
+  const gate = permissionGate({
+    session,
+    config: { ...DEFAULT_CONFIG, autoApprove },
+    rootDir: '/tmp/proto',
+    emit: (event) => void emitted.push(event),
+    record: (event) => void recorded.push(event),
+  });
+
+  const controller = new AbortController();
+  const decision = gate(toolName, input, /** @type {any} */ ({ signal: controller.signal }));
+
+  // O pedido so existe depois que o `emit` aconteceu; responde-lo e o que
+  // destrava a promessa acima.
+  await Promise.resolve();
+  const requestId = emitted[0]?.requestId;
+  if (requestId) session.pending.get(requestId)?.({ allow, answers });
+
+  return { emitted, recorded, decision: /** @type {any} */ (await decision), requestId };
+}
+
+test('a aprovacao de uma edicao vira veredito no transcript, e nao evento do stream', async () => {
+  const { emitted, recorded, decision, requestId } = await runGate({
+    toolName: 'Write', input: { file_path: '/tmp/proto/a.html', content: 'x' }, allow: true,
+  });
+
+  assert.deepEqual(emitted.map((event) => event.type), ['permission'], 'so o pedido vai ao navegador');
+  assert.deepEqual(recorded, [
+    { type: 'permission-result', requestId, allow: true, answers: {} },
+  ]);
+  assert.equal(decision.behavior, 'allow');
+});
+
+test('a recusa de uma edicao tambem e registrada', async () => {
+  const { recorded, decision } = await runGate({
+    toolName: 'Write', input: { file_path: '/tmp/proto/a.html', content: 'x' }, allow: false,
+  });
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].allow, false);
+  assert.equal(decision.behavior, 'deny');
+});
+
+test('a resposta a uma pergunta do agente entra no transcript com as escolhas', async () => {
+  const { emitted, recorded, decision } = await runGate({
+    toolName: 'AskUserQuestion',
+    input: { questions: [{ question: 'Qual paleta?', options: [{ label: 'clara' }] }] },
+    allow: true,
+    answers: { 'Qual paleta?': 'clara' },
+  });
+
+  assert.deepEqual(emitted.map((event) => event.type), ['question']);
+  assert.equal(recorded[0].type, 'permission-result');
+  assert.deepEqual(recorded[0].answers, { 'Qual paleta?': 'clara' });
+  assert.equal(decision.behavior, 'allow');
+});
+
+test('com aprovacao automatica nao ha pedido nem veredito a registrar', async () => {
+  const { emitted, recorded, decision } = await runGate({
+    toolName: 'Write', input: { file_path: '/tmp/proto/a.html', content: 'x' }, allow: true, autoApprove: true,
+  });
+
+  assert.deepEqual(emitted, []);
+  assert.deepEqual(recorded, []);
+  assert.equal(decision.behavior, 'allow');
+});
+
+test('resolvePermission ignora pedido de sessao que nao existe', () => {
+  assert.equal(resolvePermission('sessao-que-nao-existe', 'p1', true), false);
 });
 
 /* ---------- server/agent.js: ambiente ---------- */
@@ -571,6 +892,28 @@ test('o rascunho e por raiz observada e a string vazia o apaga', () => {
   useStorage(brokenStorage());
   assert.doesNotThrow(() => saveChatDraft('x'));
   assert.equal(loadChatDraft(), '');
+});
+
+test('a conversa aberta e lembrada por raiz observada', () => {
+  useStorage(memoryStorage());
+  assert.equal(loadOpenConversation(), '', 'sem nada gravado, nenhuma conversa esta aberta');
+
+  saveOpenConversation('sessao-1');
+  assert.equal(loadOpenConversation(), 'sessao-1');
+
+  source.root = '/tmp/outra-pasta';
+  assert.equal(loadOpenConversation(), '', 'outra raiz nao herda a conversa da primeira');
+
+  source.root = '/tmp/proto';
+  saveOpenConversation('');
+  assert.equal(loadOpenConversation(), '', 'string vazia apaga a marca');
+});
+
+test('a conversa aberta tolera localStorage bloqueado', () => {
+  useStorage(brokenStorage());
+  assert.equal(loadOpenConversation(), '');
+  saveOpenConversation('sessao-1');
+  assert.equal(loadOpenConversation(), '');
 });
 
 /* ---------- client/utils.js ---------- */

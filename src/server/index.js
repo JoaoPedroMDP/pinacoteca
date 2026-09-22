@@ -15,6 +15,7 @@ import { readJsonBody, resolveInside, sendFile, sendJson, sendText } from './htt
 import { startWatcher } from './watcher.js';
 import { SseHub } from './sse.js';
 import { publicConfig, readConfig, writeConfig } from './config.js';
+import { deleteConversation, openConversation, readConversation, readIndex } from './history.js';
 import { hasAmbientCredential, interrupt, resolvePermission, runTurn } from './agent.js';
 
 /** @typedef {import('node:http').IncomingMessage} IncomingMessage */
@@ -128,16 +129,69 @@ async function streamTurn(req, res, rootDir, body) {
     if (current) interrupt(current);
   });
 
+  // O gravador do transcript nasce no primeiro evento, que e sempre o `session`:
+  // antes dele nao ha id de conversa para dar nome ao arquivo. A mensagem do
+  // usuario entra logo ali, porque ao vivo ela nunca passa pelo stream — quem a
+  // desenha e o proprio cliente, no envio.
+  // Numa caixa, e nao numa variavel solta: quem grava e o callback, e o
+  // `await` la embaixo precisa enxergar o que ele guardou.
+  /** @type {{ current: import('./history.js').ConversationWriter | null }} */
+  const writer = { current: null };
+
   await runTurn({
     rootDir,
     sessionId,
     text,
     onEvent(event) {
-      if (event.type === 'session') current = event.sessionId;
+      if (event.type === 'session') {
+        current = event.sessionId;
+        writer.current = openConversation(rootDir, event.sessionId);
+        writer.current.record({ type: 'user', text });
+      }
+      writer.current?.record(event);
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     },
+    onRecord(event) {
+      writer.current?.record(event);
+    },
   });
+
+  // `runTurn` sai sempre com um `done`, tenha o turno acabado por resposta, por
+  // erro ou por interrupcao — entao fechar aqui fecha nos tres casos.
+  await writer.current?.close();
   res.end();
+}
+
+/**
+ * As conversas gravadas: a lista de uma raiz e o transcript de uma delas.
+ *
+ * Sao leitura, entao sao `GET` — o `POST` continua reservado para o que muda
+ * alguma coisa, e apagar mora com ele, em `handleChat`.
+ *
+ * @param {IncomingMessage} req
+ * @param {ServerResponse} res
+ * @param {string} pathname
+ * @param {string} rootDir
+ * @returns {Promise<boolean>} false quando `pathname` nao e uma destas
+ */
+async function listConversations(req, res, pathname, rootDir) {
+  if (pathname === `${CHAT_PREFIX}conversations`) {
+    sendJson(req, res, 200, { conversations: await readIndex(rootDir) });
+    return true;
+  }
+
+  if (!pathname.startsWith(`${CHAT_PREFIX}conversations/`)) return false;
+
+  const id = decodeURIComponent(pathname.slice(`${CHAT_PREFIX}conversations/`.length));
+  const events = await readConversation(rootDir, id);
+  // Conversa que nao existe e 404, e nao uma conversa vazia: o board precisa
+  // saber a diferenca entre "nao achei" e "nao tem nada aqui".
+  if (!events) {
+    sendText(req, res, 404, 'Conversa nao encontrada');
+    return true;
+  }
+  sendJson(req, res, 200, { sessionId: id, events });
+  return true;
 }
 
 /**
@@ -164,6 +218,8 @@ async function handleChat(req, res, pathname, rootDir) {
     return true;
   }
 
+  if (req.method !== 'POST' && await listConversations(req, res, pathname, rootDir)) return true;
+
   // O resto so existe em POST; um GET neles cai no 404.
   if (req.method !== 'POST') return false;
   const body = asObject(await readJsonBody(req, BODY_LIMIT_BYTES));
@@ -185,6 +241,16 @@ async function handleChat(req, res, pathname, rootDir) {
   // (`answers`). Sao o mesmo gesto do ponto de vista do servidor — alguem
   // respondeu o que estava esperando —, e uma rota so evita duas que fariam a
   // mesma coisa com nomes diferentes.
+  // Apagar e `POST`, e nao `DELETE`, para a regra do servidor continuar sendo
+  // uma so: `GET` le, `POST` embaixo de `/api/chat/` muda, e nao ha terceiro
+  // verbo a tratar em `routeChat`.
+  if (pathname === `${CHAT_PREFIX}conversations/delete`) {
+    const id = typeof body.id === 'string' ? body.id : '';
+    const removed = await deleteConversation(rootDir, id);
+    sendJson(req, res, 200, { ok: removed });
+    return true;
+  }
+
   if (pathname === `${CHAT_PREFIX}permission`) {
     const requestId = typeof body.requestId === 'string' ? body.requestId : '';
     resolvePermission(sessionId, requestId, body.allow === true, asObject(body.answers));
@@ -237,6 +303,9 @@ async function routeChat(req, res, pathname, rootDir) {
  * | `POST /api/chat/message` | um turno, em `text/event-stream`         |
  * | `POST /api/chat/interrupt` | aborta o turno em andamento            |
  * | `POST /api/chat/permission` | responde uma permissao ou pergunta    |
+ * | `GET /api/chat/conversations` | as conversas gravadas desta raiz    |
+ * | `GET /api/chat/conversations/:id` | o transcript de uma conversa    |
+ * | `POST /api/chat/conversations/delete` | apaga uma conversa          |
  *
  * @param {{ rootDir: string, hub: SseHub }} context
  * @returns {(req: IncomingMessage, res: ServerResponse) => Promise<void>}

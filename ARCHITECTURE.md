@@ -17,10 +17,11 @@ por edição"), e nem com a aprovação automática ligada o agente escreve fora
 observada.
 
 A **ferramenta** continua não sujando a pasta: o que ela própria guarda fica fora dali. A
-organização das telas, o rascunho e o histórico da conversa vivem no `localStorage` do
+organização das telas, o rascunho e o histórico do compositor vivem no `localStorage` do
 navegador (veja "Organização das telas"); a chave da API e as preferências do agente
-vivem em `~/.config/pinacoteca/config.json` (veja "A chave fora da pasta e fora do
-navegador"). Nenhum arquivo de metadado nasce no diretório dos protótipos.
+vivem em `~/.config/pinacoteca/config.json`, e o transcript de cada conversa em
+`~/.config/pinacoteca/history/` (veja "A chave fora da pasta e fora do navegador" e "O
+transcript das conversas"). Nenhum arquivo de metadado nasce no diretório dos protótipos.
 
 Caso de uso: o usuário deixa o board aberto em um segundo monitor enquanto um agente
 gera e reescreve os HTMLs. As telas se atualizam sozinhas, sem F5, sem clicar em nada. O
@@ -150,6 +151,78 @@ valor de tipo errado ou fora de `MODELS`/`EFFORTS` cai no valor atual e só ent�
 — um patch estragado não apaga uma escolha boa que já estava gravada. Ler é tolerante a
 falha pelo mesmo motivo que o `storage.js` do cliente é: arquivo ausente, JSON estragado
 ou permissão negada devolvem os padrões em vez de derrubar o servidor.
+
+### O transcript das conversas
+
+Cada conversa é gravada em `~/.config/pinacoteca/history/<slug-da-raiz>/`, com um
+`<sessionId>.jsonl` por conversa e um `index.json` com a lista. O `<slug>` é o nome da
+pasta observada mais um hash curto do caminho absoluto: o nome deixa achar na mão, o hash
+separa duas pastas de mesmo nome em lugares diferentes. As permissões são as do
+`config.json` (`700`/`600`), e pelo mesmo motivo — o transcript carrega o que o usuário
+disse e trechos dos arquivos dele.
+
+Por que não na pasta observada, que era o lugar mais óbvio: o `cwd` do agente **é** a raiz
+observada. Um transcript ali dentro seria um metadado que o usuário não pediu, que ele
+teria de lembrar de não commitar, e que o próprio agente passaria a ver, grepar e poder
+reescrever. É a mesma recusa da organização das telas, com um motivo a mais.
+
+Por que não no `localStorage`: o teto de ~5MB por origem não serve para transcript com
+entrada de tool e diff, e ele some quando o usuário limpa os dados do navegador.
+
+**Por que o board precisa disso.** O log não tem modelo de mensagens — `chat.js` monta nó
+por nó —, então nada dele sobreviveria a um F5. Guardar só o `sessionId` faria o *agente*
+lembrar (é o `resume` do SDK) e a tela continuar vazia; as duas metades precisam voltar
+juntas.
+
+O arquivo é JSONL porque o caso comum é acrescentar no fim enquanto o turno acontece:
+reescrever um array inteiro a cada evento seria O(n²) de IO numa conversa longa. Os deltas
+de `text` e `thinking` são **coalescidos na escrita** — um bloco fica aberto em memória e
+vira linha quando o tipo de evento muda ou o turno acaba. Gravar delta a delta daria
+milhares de linhas por turno e uma leitura cara em toda carga do board; o preço é perder o
+bloco em curso se o processo morrer no meio dele, que é justamente o texto que o usuário
+está vendo na tela naquele instante.
+
+O `index.json` é **cache**, e os arquivos são a verdade: `readIndex` sempre varre a pasta
+e só pergunta ao índice o título de cada conversa, relendo o `.jsonl` de quem ele não
+souber. Índice ilegível custa uma leitura a mais, nunca uma conversa sumida da lista. A
+gravação dele é atômica (arquivo temporário + `rename`), e só a conversa que acabou de
+mexer é relida.
+
+**O replay entra pela mesma porta do vivo.** O cliente busca os eventos e os passa por
+`replayEvent`, que reusa os mesmos desenhadores de `chat.js` — dois caminhos de desenho
+divergiriam no primeiro bloco novo. O que muda é só o que não faz sentido fora do turno:
+nada é respondido sozinho (nem com a aprovação automática ligada), nada é mandado ao
+servidor, e o pedido que ficou sem resposta volta **expirado** — visível, sem botão vivo,
+porque a promessa que o esperava morreu com o turno. Pedido que *teve* resposta volta
+aprovado, rejeitado ou respondido, e é para isso que o `permission-result` é gravado.
+
+Limites aceitos:
+
+- **Reload no meio de um turno**: o turno continua no servidor e continua sendo gravado,
+  mas o board não reata o stream. Ele reabre a conversa até o último evento escrito;
+  reabri-la depois mostra o turno completo.
+- **Duas abas na mesma conversa**: as duas escrevem no mesmo arquivo por append e o índice
+  é último-a-escrever-vence. Uma não vê o que a outra fez até reabrir. A ferramenta é de
+  uma pessoa numa máquina.
+- **Tamanho**: entrada de tool e diff são aparados na mesma régua que o board usa para
+  mostrá-los, e o arquivo tem teto de bytes — ao estourar, a metade mais antiga sai e uma
+  marca de corte fica no lugar. Conversa inteira só some quando o usuário apaga.
+
+### As duas subabas da conversa
+
+A aba Conversa tem dois estados, e eles são duas subabas: `Conversas`, onde se escolhe,
+começa e apaga, e `Chat`, que é o painel de sempre. Isso mora no mesmo `tabs.js` das abas
+da sidebar porque é o mesmo gesto num segundo nível — mostrar um painel e esconder os
+irmãos —, e um arquivo novo só se justifica quando o existente passa a fazer duas coisas.
+
+Na carga, a aba abre em `Chat` quando havia conversa aberta (o id fica no `localStorage`,
+por raiz) e em `Conversas` quando não havia. Conversa nova não entra na lista enquanto
+nada for enviado: o que a lista mostra são transcripts, e até a primeira mensagem não há
+transcript nenhum.
+
+Com um turno rodando, abrir, criar e apagar ficam indisponíveis — a lista continua
+olhável. Trocar de conversa no meio de um turno jogaria fora uma resposta já paga; quem
+encerra turno é o botão Parar, e ele continua sendo o único.
 
 ### O stream da conversa é SSE escrito à mão sobre `POST`
 
@@ -349,6 +422,7 @@ desenvolvimento, onde sempre há algo escutando em porta redonda.
 | `src/server/watcher.js` | `chokidar` traduzido em eventos do board |
 | `src/server/sse.js` | o canal aberto com cada board |
 | `src/server/config.js` | `~/.config/pinacoteca/config.json`: chave, modelo, esforço e preferências |
+| `src/server/history.js` | `~/.config/pinacoteca/history/`: o transcript de cada conversa e a lista delas |
 | `src/server/agent.js` | a ponte com o Claude Agent SDK: um turno, as tools e as permissões |
 
 Rota nova entra em `createRequestHandler`. Se ela precisar de algo que qualquer outra
@@ -395,6 +469,9 @@ Rotas, na íntegra:
 | `POST /api/chat/message` | `{ sessionId, text }` | `text/event-stream` com os eventos da conversa |
 | `POST /api/chat/interrupt` | `{ sessionId }` | `{ ok: true }` |
 | `POST /api/chat/permission` | `{ sessionId, requestId, allow, answers? }` | `{ ok: true }` |
+| `GET /api/chat/conversations` | — | `{ conversations: [{ id, title, updatedAt, messageCount }] }` |
+| `GET /api/chat/conversations/:id` | — | `{ sessionId, events }` — ou `404` |
+| `POST /api/chat/conversations/delete` | `{ id }` | `{ ok }` |
 
 **`POST` existe só embaixo de `/api/chat/`.** O resto do servidor continua respondendo
 apenas `GET` e `HEAD`, e o roteador separa os dois mundos na primeira linha: quem não
@@ -458,6 +535,12 @@ linha `data:`. Ele é gerado em `agent.js` (`ChatEvent`) e consumido em `chat-cl
 { "type": "done",        "stopReason": "end_turn" }                 // sempre o último, sempre um
 ```
 
+Dois eventos existem **só no disco**, e nunca no stream: `user`, com a mensagem que o
+usuário mandou, e `permission-result`, com o que ele respondeu a um pedido. Ao vivo eles
+seriam ruído — a bolha do usuário o próprio cliente desenha no envio, e o veredito quem
+pinta é o clique. Gravados, são o que faz um reload reencontrar a conversa inteira em vez
+de mostrar como pendente o que já foi aprovado (veja "O transcript das conversas").
+
 Duas garantias que o cliente pode assumir: o `session` vem antes de tudo (é ele que dá o
 `sessionId` de uma conversa nova), e sai **exatamente um** `done` por turno — por
 resposta, por erro ou por interrupção. É o que permite ao board fechar o balão sem contar
@@ -488,16 +571,20 @@ Sem framework e sem bundler, mas dividido em módulos ES nativos. `index.html` c
 | `src/client/feedback.js` | toast e área de transferência |
 | `src/client/controls.js` | listeners de mouse, teclado, toolbar e a largura da sidebar |
 | `src/client/sse.js` | eventos do servidor aplicados no board |
-| `src/client/tabs.js` | as abas da sidebar: qual painel está visível |
+| `src/client/tabs.js` | as abas da sidebar e as subabas da conversa: qual painel está visível |
 | `src/client/chat.js` | o painel de conversa: compositor, histórico, log e as bolhas |
+| `src/client/conversations.js` | a subaba `Conversas`: a lista, criar, abrir e apagar |
 | `src/client/chat-client.js` | o transporte da conversa: as rotas `/api/chat/` |
 
-Os três últimos entram no fim da ordem de dependência de propósito. `tabs.js` conhece só
-`dom.js` e `state.js` — trocar de aba não pode depender de haver conversa. `chat.js`
-conhece `constants`, `dom`, `state`, `storage` e `feedback`, e **não faz rede**.
-`chat-client.js` é o único que fala com o servidor, e é o único que importa `chat.js`: a
-seta aponta do transporte para o desenho, nunca ao contrário, e é isso que deixa o painel
-funcionar (desenhando) antes de haver chave configurada.
+Os quatro últimos entram no fim da ordem de dependência de propósito. `tabs.js` conhece
+`dom.js`, `state.js` e o `autoGrow` de `chat.js` — os dois níveis de aba são o mesmo
+gesto, mostrar um painel e esconder os irmãos, e por isso moram juntos. `chat.js` conhece
+`constants`, `dom`, `state`, `storage`, `feedback` e `conversations` (só para a lista
+acompanhar o turno em andamento), e **não faz rede**. `conversations.js` desenha as
+*outras* conversas e também não faz rede: os gestos dele saem por `chat.transport`.
+`chat-client.js` é o único que fala com o servidor: a seta aponta do transporte para o
+desenho, nunca ao contrário, e é isso que deixa o painel funcionar (desenhando) antes de
+haver chave configurada.
 
 O acordo entre os dois é o `ChatTransport` de `state.js`, com todos os campos opcionais:
 `chat.js` chama `chat.transport?.send?.(...)` e segue a vida se ninguém tiver se
@@ -694,13 +781,14 @@ a organização de uma não tem nada a ver com a da outra. Toda leitura e escrit
 falha (modo privado, JSON estragado): o pior caso é o board voltar ao layout automático,
 nunca quebrar.
 
-O `storage.js` guarda hoje três famílias, e a divisão entre elas é o que a chave carrega:
+O `storage.js` guarda duas famílias, e a divisão entre elas é o que a chave carrega:
 
 | O que | Chave | Por quê |
 | --- | --- | --- |
 | Posições e tamanhos das telas | por raiz observada | é a organização *daquela* pasta |
 | Rascunho do compositor | por raiz observada | conversa em andamento é sobre aquela pasta; o texto não enviado de uma não deve vazar para o board de outra |
 | Histórico de mensagens enviadas | por raiz observada | a seta pra cima só deve trazer o que foi pedido àquele board |
+| Qual conversa está aberta | por raiz observada | o *conteúdo* da conversa é do servidor; qual delas se está olhando é do navegador, e duas janelas na mesma pasta podem estar em conversas diferentes |
 | Snap-to-grid | por navegador | é jeito de trabalhar, não conteúdo de pasta |
 | Largura da sidebar | por navegador | o tamanho confortável do painel depende do monitor, não da pasta |
 | `model`, `effort`, `sendOnEnter` | por navegador | **cópia de exibição**: a verdade é a configuração do servidor, e `applyServerConfig` sobrescreve quando ela chega |
@@ -1142,8 +1230,10 @@ E o que **fica por conta do usuário**, dito sem rodeio:
    | Um tipo de evento novo do watcher | `src/server/watcher.js` **e** `src/client/sse.js` |
    | O que é ou não um protótipo | `src/server/screens.js` |
    | O painel da conversa: bolha, bloco, atalho do compositor | `src/client/chat.js` |
+   | A lista de conversas: item, criar, abrir, apagar | `src/client/conversations.js` |
+   | O que fica gravado de uma conversa | `src/server/history.js` |
    | Falar com `/api/chat/`: requisição, stream, evento aplicado | `src/client/chat-client.js` |
-   | Um tipo de evento novo da conversa | `src/server/agent.js` **e** `src/client/chat-client.js` (e a tabela deste arquivo) |
+   | Um tipo de evento novo da conversa | `src/server/agent.js` **e** `src/client/chat-client.js` (e a tabela deste arquivo); se ele precisa sobreviver a um reload, também `src/server/history.js` e o `replayEvent` |
    | Uma aba nova na sidebar | `src/client/tabs.js` + `index.html` |
    | Uma preferência ou credencial do agente | `src/server/config.js` |
    | O que o agente pode fazer: tool, permissão, limite | `src/server/agent.js` |
