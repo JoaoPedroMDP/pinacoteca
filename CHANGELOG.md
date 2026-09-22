@@ -1,3 +1,10 @@
+## 0.14.0 (2026-09-22)
+
+### Feat
+
+- Persistencia de conversas
+- Aglomera ações iguais subsequentes ao mesmo arquivo
+
 ## 0.13.0 (2026-09-22)
 
 ### Feat
