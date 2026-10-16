@@ -117,6 +117,28 @@ Uma consequência de fronteira: `agent.js` é a única parte do servidor que con
 Tudo que sai dele são os eventos de `ChatEvent`, que são nossos. Trocar de motor
 reescreveria `agent.js` e mais nada.
 
+### O agente sabe que está no pinacoteca
+
+Sem `systemPrompt`, o SDK roda com um prompt mínimo — nem o do Claude Code. O agente só
+conhecia o `cwd`, e gerava protótipo como geraria código de projeto: CSS em arquivo
+separado, passo de build, sem saber que cada `.html` vira uma tela num board que recarrega
+sozinho.
+
+Por isso `buildOptions` usa o preset `claude_code` com um `append` (`PINACOTECA_PROMPT`, em
+`agent.js`) que diz onde ele está: um arquivo é uma tela, o board recarrega a cada
+gravação, o protótipo é autocontido (dependência só por CDN), toda edição passa por
+aprovação, e os comentários apontados no board chegam como lista de `XPath:` +
+`Comentário:` (o formato de `serializeCommentQueue`). Mudar esse formato pede mudar o
+prompt junto.
+
+O `snapshot: true` grava o prompt na sessão: um `resume` reusa exatamente o mesmo, o que
+mantém o cache e não descarta o raciocínio anterior. O custo é que editar o texto só vale
+para conversas novas.
+
+O `settingSources` continua vazio de propósito: um `CLAUDE.md` ou `.claude/` da pasta
+observada **não** é carregado. Carregar traria junto as permissões e skills daquele
+projeto, e a decisão do que o agente pode fazer é de `agent.js`.
+
 ### A chave fora da pasta e fora do navegador
 
 A chave da API vive em `~/.config/pinacoteca/config.json`, com o diretório em `700` e o

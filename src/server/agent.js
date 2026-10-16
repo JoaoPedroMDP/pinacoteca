@@ -83,6 +83,27 @@ const PATH_FIELDS = ['file_path', 'path', 'notebook_path'];
 // `answeredInput`), e e assim que a resposta chega ao modelo.
 const QUESTION_TOOL = 'AskUserQuestion';
 
+// O que o agente precisa saber sobre onde esta rodando. Vai anexado ao prompt
+// do Claude Code (veja `buildOptions`): sem isso ele so conhece o `cwd` e
+// gera prototipo como geraria codigo de projeto — com build, com arquivo de
+// estilo separado, sem saber que o resultado aparece num board.
+const PINACOTECA_PROMPT = `\
+You are running inside pinacoteca, an HTML prototype viewer. The user is looking at a \
+board that shows every .html file in the working directory side by side, with zoom and pan.
+
+- Each .html file is one screen on the board. To create a screen, create a new file; to \
+change a screen, edit its file.
+- The board reloads a screen as soon as its file is saved, so the user sees each change \
+right away.
+- Prototypes must be self-contained: CSS and JS inline, no build step, no local \
+dependencies. If a library is needed, load it from a CDN.
+- Every file edit goes through the user's approval, and you can only write inside the \
+working directory.
+- The user can point at elements on the board. Those references arrive as a numbered \
+list of "XPath: ..." lines, each followed by a "Comentário: ..." with what to change in \
+that element. Locate the element by its XPath in the prototype the user is talking about; \
+if it is not clear which file it is, check which one matches or ask.`;
+
 /** @type {Map<string, Session>} */
 const sessions = new Map();
 
@@ -563,6 +584,15 @@ function buildOptions({ rootDir, config, isNew, sessionId, controller, canUseToo
   return {
     // O agente so enxerga a pasta observada.
     cwd: rootDir,
+    // Sem `systemPrompt` o SDK usa um prompt minimo, nem o do Claude Code. O
+    // `snapshot` grava o prompt na sessao: um `resume` reusa o mesmo, e mudar
+    // o texto so vale para conversas novas.
+    systemPrompt: {
+      type: 'preset',
+      preset: 'claude_code',
+      append: PINACOTECA_PROMPT,
+      snapshot: true,
+    },
     model: config.model,
     effort: /** @type {import('@anthropic-ai/claude-agent-sdk').EffortLevel} */ (config.effort),
     env: agentEnv(config.apiKey),
