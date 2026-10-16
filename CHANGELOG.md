@@ -1,3 +1,9 @@
+## 0.15.0 (2026-10-16)
+
+### Feat
+
+- Agora o Claude recebe contextos e CLAUDE.md's presente na pasta do projeto
+
 ## 0.14.0 (2026-09-22)
 
 ### Feat
