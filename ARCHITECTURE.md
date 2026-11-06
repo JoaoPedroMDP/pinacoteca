@@ -125,9 +125,15 @@ separado, passo de build, sem saber que cada `.html` vira uma tela num board que
 sozinho.
 
 Por isso `buildOptions` usa o preset `claude_code` com um `append` (`PINACOTECA_PROMPT`, em
-`agent.js`) que diz onde ele está: um arquivo é uma tela, o board recarrega a cada
-gravação, o protótipo é autocontido (dependência só por CDN), toda edição passa por
-aprovação, e os comentários apontados no board chegam como lista de `XPath:` +
+`agent.js`) que diz onde ele está: um arquivo é uma tela, e o board
+deve mostrar todas as telas do sistema para o usuário ver o produto sem rodá-lo — nunca o
+sistema inteiro num único `.html` navegável. Estados locais pequenos (campo com erro,
+dropdown, modal, aba) ficam dentro da tela; só tela distinta ou estado de peso próprio
+ganha arquivo —, a tela é interativa de verdade (dropdown abre, input aceita
+texto, botão responde), nada de chamada de rede (dados mockados no arquivo, resposta
+simulada), o board recarrega a cada gravação, o protótipo é autocontido (CSS e JS inline,
+sem build, sem dependência externa), toda edição passa por aprovação, e os comentários
+apontados no board chegam como lista de `XPath:` +
 `Comentário:` (o formato de `serializeCommentQueue`). Mudar esse formato pede mudar o
 prompt junto.
 
