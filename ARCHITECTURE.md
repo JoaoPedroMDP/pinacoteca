@@ -981,6 +981,11 @@ ponteiro) e **`Esc`** (devolve o controle ao board). Espaço, `0`, `1`, `+` e `-
 propósito — são caracteres que o usuário pode estar digitando num campo do protótipo, e
 sequestrá-los quebraria justamente o que o modo interativo existe para permitir.
 
+A mesma regra vale fora do iframe: no `keydown` da janela, `0`, `1`, `+` e `-` só viram
+zoom quando o foco **não** está num campo de texto (`isTypingTarget` — o compositor da
+conversa, a caixinha de comentário, o campo de nome da pasta). `Esc` continua valendo em
+qualquer lugar.
+
 No modo ponteiro o escudo volta mesmo sobre a tela liberada (`#viewport.is-pointer
 .card.is-interactive .card-shield`), senão segurar `Alt` de dentro do protótipo ligaria o modo
 sem nada para destacar. Soltar a tecla esconde o escudo de novo e a tela continua interativa.

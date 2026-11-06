@@ -890,6 +890,12 @@ check('o rascunho sobrevive a ida e volta entre as subabas',
   (await composerValue()) === 'rascunho que nao pode sumir');
 await clearComposer();
 
+// Digitar `-`, `+`, `0` e `1` num campo e escrever, nao mexer no zoom do board.
+const scaleBeforeTyping = await board.evaluate("import('/app/state.js').then((m) => m.view.scale)");
+for (const key of ['-', '+', '=', '0', '1']) await press(key);
+check('atalhos de zoom nao disparam enquanto se digita no compositor',
+  (await board.evaluate("import('/app/state.js').then((m) => m.view.scale)")) === scaleBeforeTyping);
+
 // Os blocos do log so aparecem quando o transporte existe, e ele e da tarefa
 // seguinte. O modulo ja esta carregado pelo board, entao o `import` devolve a
 // mesma instancia e as funcoes desenham no `#chat-log` de verdade.

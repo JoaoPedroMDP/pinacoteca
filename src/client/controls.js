@@ -571,12 +571,23 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     setInteractive(null);
     closeSizeMenu();
+    return;
   }
-  else if (event.key === '0') fitToScreen();
-  else if (event.key === '1') resetZoom();
-  else if (event.key === '+' || event.key === '=') zoomByStep(ZOOM_STEP);
-  else if (event.key === '-') zoomByStep(1 / ZOOM_STEP);
+
+  // Atalhos de uma tecla so viram caractere dentro de um campo de texto.
+  if (!isTypingTarget(event.target)) handleZoomShortcut(event.key);
 });
+
+/**
+ * Os atalhos de zoom de uma tecla so: enquadrar, 100%, aproximar e afastar.
+ * @param {string} key
+ */
+function handleZoomShortcut(key) {
+  if (key === '0') fitToScreen();
+  else if (key === '1') resetZoom();
+  else if (key === '+' || key === '=') zoomByStep(ZOOM_STEP);
+  else if (key === '-') zoomByStep(1 / ZOOM_STEP);
+}
 
 window.addEventListener('keyup', (event) => {
   if (event.key === heldKey) releaseHeldMode();
