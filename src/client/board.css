@@ -576,8 +576,10 @@ body {
   color: var(--accent);
 }
 
-/* O badge de Shift+Enter fica no canto do botao Enviar, nao mais numa linha
-   propria — o proprio botao vira a moldura de referencia (position: relative). */
+/* O badge de Shift+Enter fica no canto do botao visivel — Enviar, ou Parar
+   durante o turno — e o wrap e a moldura de referencia (position: relative).
+   Parar mora dentro do wrap: fora dele, com Enviar escondido, o wrap colapsava
+   em 0x0 e o badge flutuava solto ao lado do Parar. */
 .chat-send-wrap {
   position: relative;
   margin-left: auto;

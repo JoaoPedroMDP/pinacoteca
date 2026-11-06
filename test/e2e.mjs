@@ -1873,6 +1873,17 @@ check('o bloco da ferramenta do stream fecha em ok',
   (await lastOf('#chat-log .chat-tool.is-ok .chat-tool-status')) === 'criado');
 await checkEventually('o `done` destrava o botao Parar', async () => !(await stopVisible()));
 
+// Com Enviar escondido, o badge de Shift+Enter tem de seguir colado no Parar.
+check('durante o turno, o badge de Shift+Enter fica no canto do Parar', await board.evaluate(`
+  import('/app/chat.js').then((m) => {
+    m.setTurnRunning(true);
+    const stop = document.getElementById('chat-stop').getBoundingClientRect();
+    const badge = document.getElementById('chat-send-mode').getBoundingClientRect();
+    m.setTurnRunning(false);
+    return badge.left < stop.right && badge.right > stop.right
+      && badge.top < stop.top && badge.bottom > stop.top;
+  })`));
+
 // Servidor caido no meio do turno: sem `done`, a interface tem de destravar
 // mesmo assim — botao Parar preso e a pior falha possivel aqui.
 const errorsBefore = await errorCount();

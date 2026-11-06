@@ -656,7 +656,9 @@ Duas regras seguram essa divisão:
 - **Map de assets** — `tela → recursos carregados`, lido de cada iframe a cada `load`.
   Um evento `asset` recarrega apenas as telas cujo conjunto contém aquele arquivo.
 - **Aba Conversa** — o log das mensagens, o compositor e os seletores de modelo, esforço,
-  aprovação automática e modo de envio. Todo texto que vem do modelo ou dos arquivos do
+  aprovação automática e modo de envio. Enviar e Parar dividem o mesmo `.chat-send-wrap`
+  (só um aparece por vez), e o badge de Shift+Enter fica preso ao canto do que estiver
+  visível. Todo texto que vem do modelo ou dos arquivos do
   usuário entra por `textContent`, nunca por `innerHTML`: é conteúdo de fora, e o board o
   trata como tal. O log acompanha o fim só para quem já estava no fim — quem rolou para
   cima para ler não tem a viewport arrastada. O painel inteiro usa uma fonte menor que a
