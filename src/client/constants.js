@@ -75,6 +75,22 @@ export const SIDEBAR_MIN_CANVAS = 320;
 /** Espaco entre cards, em px de canvas. */
 export const GAP = 72;
 
+/** Folga entre as telas de uma pasta e a borda do fundo colorido dela, em px de
+ * canvas. Telas na raiz nao tem fundo, e nem folga. */
+export const FOLDER_ZONE_PAD = 28;
+
+/** Faixa reservada no topo do fundo da pasta para o nome dela, em px de canvas. */
+export const FOLDER_ZONE_LABEL = 44;
+
+/** Ate que distancia (o vao entre as caixas, em px de canvas) uma tela conta
+ * como encostada em outra da mesma pasta — e entra no fundo dela. Folgado alem
+ * do `GAP`, para o vao que o proprio layout deixa sempre ligar as telas. */
+export const FOLDER_REACH = GAP * 1.5;
+
+/** Tipos do `dataTransfer` no arrasto da sidebar: uma tela ou uma pasta. */
+export const DRAG_SCREEN_TYPE = 'application/x-pinacoteca-screen';
+export const DRAG_FOLDER_TYPE = 'application/x-pinacoteca-folder';
+
 /**
  * Deslocamento minimo, em px de tela, para o pointerdown do pan virar arrasto
  * de fato (e so entao capturar o ponteiro). Abaixo disso e tratado como

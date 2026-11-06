@@ -53,6 +53,59 @@ export const screens = new Map();
 export const collapsedDirs = new Set();
 
 /**
+ * Organizacao das telas em pastas, como o usuario a ve. So vive no navegador:
+ * mover uma tela de pasta aqui nunca move o arquivo no disco.
+ *
+ * - `overrides`: pasta efetiva de cada tela que o usuario mudou de lugar. Tela
+ *   ausente esta na pasta real dela.
+ * - `extra`: pastas criadas pelo usuario, que existem mesmo sem tela dentro.
+ * - `hues`: o matiz sorteado de cada pasta de topo, na primeira vez em que ela
+ *   apareceu. Gravado para a cor nao mudar a cada carga.
+ * - `colors`: a cor que o usuario escolheu para uma pasta. Vence a sorteada e a
+ *   derivada do pai.
+ * - `origins`: onde o usuario pos o bloco de uma pasta, arrastando pelo nome no
+ *   board (canto de cima, em px de canvas). Pasta ausente vai para a prateleira
+ *   do layout.
+ * - `lastMoved`: a ultima tela movida a mao de cada pasta. E ela que segura o
+ *   fundo da pasta quando nenhuma tela do grupo e mais do layout automatico.
+ *
+ * Carregado e gravado por `folders.js`.
+ *
+ * @type {{
+ *   overrides: Map<string, string>,
+ *   extra: Set<string>,
+ *   hues: Record<string, number>,
+ *   colors: Record<string, string>,
+ *   origins: Record<string, { x: number, y: number }>,
+ *   lastMoved: Record<string, string>,
+ * }}
+ */
+export const folders = {
+  overrides: new Map(),
+  extra: new Set(),
+  hues: {},
+  colors: {},
+  origins: {},
+  lastMoved: {},
+};
+
+/** @type {Array<() => void>} */
+const folderListeners = [];
+
+/**
+ * Inscreve uma funcao para redesenhar sempre que a organizacao em pastas mudar.
+ * @param {() => void} listener
+ */
+export function onFoldersChange(listener) {
+  folderListeners.push(listener);
+}
+
+/** Avisa quem se inscreveu em `onFoldersChange` que as pastas mudaram. */
+export function notifyFoldersChange() {
+  for (const listener of folderListeners) listener();
+}
+
+/**
  * De onde este board le. `root` e a pasta observada, preenchida na carga a
  * partir de `/api/screens`; e ela que identifica o board no localStorage, senao
  * duas pastas abertas no mesmo navegador embaralhariam as posicoes salvas.
@@ -84,6 +137,8 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   registro de posicoes.
  * - `globalSizeMenuOpen`: o menu da toolbar esta aberto. Separado de
  *   `openSizeMenuFile` porque nao e de tela nenhuma.
+ * - `openFolderMenu`: a pasta com o menu aberto no nome dela, no board. Um por
+ *   vez, como o de tamanho.
  * - `snapToGrid`: liga o alinhamento a grade no arrasto de tela. Carregado do
  *   localStorage por `board.js` na carga inicial (`state.js` nao importa
  *   `storage.js` — a dependencia so anda numa direcao).
@@ -101,6 +156,7 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   openSizeMenuFile: string | null,
  *   globalSize: { label: string, width: number, height: number } | null,
  *   globalSizeMenuOpen: boolean,
+ *   openFolderMenu: string | null,
  *   snapToGrid: boolean,
  *   lastChangedFiles: string[],
  *   activeTab: 'screens' | 'chat',
@@ -114,6 +170,7 @@ export const ui = {
   openSizeMenuFile: null,
   globalSize: null,
   globalSizeMenuOpen: false,
+  openFolderMenu: null,
   snapToGrid: false,
   lastChangedFiles: [],
   activeTab: 'screens',

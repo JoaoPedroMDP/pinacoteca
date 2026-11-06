@@ -2100,6 +2100,206 @@ check('e o localStorage passa a mostrar o que o servidor disse', await board.eva
 await board.evaluate("document.querySelector('[data-tab=\"screens\"]').click()");
 
 
+/* ---------- Pastas ---------- */
+
+process.stdout.write('\nPastas\n');
+
+fixture.write('grupo/um.html', '<!doctype html><meta charset=utf-8><h1>Um</h1>');
+fixture.write('grupo/dois.html', '<!doctype html><meta charset=utf-8><h1>Dois</h1>');
+fixture.write('grupo/sub/tres.html', '<!doctype html><meta charset=utf-8><h1>Tres</h1>');
+
+// `cardOf` vem da secao da coluna de comentarios: acha o card pelo arquivo.
+/** @type {(file: string) => Promise<string | null>} */
+const folderOfCard = (file) => board.evaluate(`${cardOf(file)}?.dataset.folderPath ?? null`);
+/** @type {(selector: string) => Promise<string>} */
+const folderColorOf = (selector) => board.evaluate(
+  `getComputedStyle(${selector}).getPropertyValue('--folder-color').trim()`);
+const itemOf = (/** @type {string} */ file) => `[...document.querySelectorAll('.screen-item')].find((el) => el.title === ${JSON.stringify(file)})`;
+const headOf = (/** @type {string} */ folder) => `[...document.querySelectorAll('.folder-head')].find((el) => el.dataset.path === ${JSON.stringify(folder)})`;
+
+/**
+ * Arrasta pela sidebar com eventos de arrasto sinteticos: o mesmo
+ * `DataTransfer` passa do `dragstart` da origem ao `drop` do alvo.
+ * @param {string} source expressao do elemento arrastado
+ * @param {string} target expressao do alvo
+ */
+const dragInSidebar = (source, target) => board.evaluate(`(() => {
+  const data = new DataTransfer();
+  const from = ${source};
+  const to = ${target};
+  const fire = (el, type) => el.dispatchEvent(
+    new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: data }));
+  fire(from, 'dragstart');
+  fire(to, 'dragover');
+  fire(to, 'drop');
+})()`);
+
+await checkEventually('telas em pasta ganham a cor da pasta no titulo', async () => (
+  (await folderOfCard('grupo/um.html')) === 'grupo'
+  && (await folderOfCard('grupo/sub/tres.html')) === 'grupo/sub'
+  && await board.evaluate(`${cardOf('grupo/um.html')}.querySelector('.card-folder-dot').offsetWidth > 0`)));
+
+check('tela na raiz nao ganha marcador de pasta', await board.evaluate(
+  `!${cardOf('solo.html')}.dataset.folderPath`
+  + ` && ${cardOf('solo.html')}.querySelector('.card-folder-dot').offsetWidth === 0`));
+
+const groupColor = await folderColorOf(cardOf('grupo/um.html'));
+const subColor = await folderColorOf(cardOf('grupo/sub/tres.html'));
+check('subpasta tem outro tom da cor da pasta', /^#[0-9a-f]{6}$/.test(groupColor)
+  && /^#[0-9a-f]{6}$/.test(subColor) && groupColor !== subColor, `${groupColor} ${subColor}`);
+check('a folha da sidebar leva a mesma cor do card',
+  (await folderColorOf(itemOf('grupo/um.html'))) === groupColor);
+
+const zoneEncloses = () => board.evaluate(`(() => {
+  const zone = [...document.querySelectorAll('.folder-zone')]
+    .find((el) => el.dataset.folderPath === 'grupo');
+  if (!zone) return false;
+  const inside = (card) => card.offsetLeft >= zone.offsetLeft && card.offsetTop >= zone.offsetTop
+    && card.offsetLeft + card.offsetWidth <= zone.offsetLeft + zone.offsetWidth
+    && card.offsetTop + card.offsetHeight <= zone.offsetTop + zone.offsetHeight;
+  return inside(${cardOf('grupo/um.html')}) && inside(${cardOf('grupo/dois.html')})
+    && zone.querySelector('.folder-zone-name').textContent === 'grupo';
+})()`);
+await checkEventually('o fundo da pasta envolve as telas dela', zoneEncloses);
+
+// Trocar a cor da pasta: recolore ao vivo e o tom da subpasta acompanha.
+await board.evaluate(`(() => {
+  const input = ${headOf('grupo')}.querySelector('.folder-color');
+  input.value = '#cc3366';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+})()`);
+check('a cor escolhida pinta as telas da pasta', (await folderColorOf(cardOf('grupo/um.html'))) === '#cc3366');
+const newSubColor = await folderColorOf(cardOf('grupo/sub/tres.html'));
+check('a subpasta sem cor propria acompanha a cor nova do pai',
+  newSubColor !== subColor && newSubColor !== '#cc3366', newSubColor);
+check('a cor escolhida fica gravada', await board.evaluate(
+  "Object.values(localStorage).some((v) => v.includes('#cc3366'))"));
+
+// Mover uma tela para a raiz e de volta para outra pasta, so no navegador.
+await dragInSidebar(itemOf('grupo/sub/tres.html'), "document.getElementById('screen-list')");
+await checkEventually('arrastar a tela para a raiz tira a pasta dela',
+  async () => (await folderOfCard('grupo/sub/tres.html')) === null);
+await dragInSidebar(itemOf('grupo/sub/tres.html'), `${headOf('grupo')}.parentElement`);
+await checkEventually('arrastar a tela para uma pasta poe a tela nela',
+  async () => (await folderOfCard('grupo/sub/tres.html')) === 'grupo');
+check('mover de pasta no board nao move o arquivo no disco',
+  fs.existsSync(path.join(fixture.dir, 'grupo/sub/tres.html'))
+  && !fs.existsSync(path.join(fixture.dir, 'grupo/tres.html')));
+
+// Pasta nova nasce pedindo nome; renomear e soltar uma tela nela.
+await board.evaluate("document.getElementById('folder-new').click()");
+check('pasta nova abre o campo de nome', await board.evaluate(
+  "document.activeElement?.classList.contains('folder-rename')"));
+await board.evaluate(`(() => {
+  const input = document.activeElement;
+  input.value = 'minha';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+})()`);
+await checkEventually('renomear a pasta nova', async () => (
+  await board.evaluate(`!!${headOf('minha')}`)));
+await dragInSidebar(itemOf('grupo/dois.html'), `${headOf('minha')}.parentElement`);
+await checkEventually('a tela vai para a pasta criada no navegador',
+  async () => (await folderOfCard('grupo/dois.html')) === 'minha');
+
+// Arrastar uma pasta para dentro de outra leva as telas junto.
+await dragInSidebar(headOf('minha'), `${headOf('grupo')}.parentElement`);
+await checkEventually('arrastar uma pasta para dentro de outra leva as telas junto',
+  async () => (await folderOfCard('grupo/dois.html')) === 'grupo/minha');
+
+await board.evaluate("document.getElementById('folder-reset').click()");
+await checkEventually('restaurar devolve as telas as pastas reais', async () => (
+  (await folderOfCard('grupo/dois.html')) === 'grupo'
+  && (await folderOfCard('grupo/sub/tres.html')) === 'grupo/sub'
+  && await board.evaluate(`!${headOf('grupo/minha')}`)));
+
+// O grupo no board: arrastar pelo nome, o fundo que segue a ultima tela movida,
+// e o menu do nome (reagrupar e mudar cor).
+const zoneOf = (/** @type {string} */ folder) => `[...document.querySelectorAll('.folder-zone')].find((el) => el.dataset.folderPath === ${JSON.stringify(folder)})`;
+/** @type {(file: string) => Promise<{ x: number, y: number, pinned: boolean }>} */
+const screenState = (file) => board.evaluate(`import('/app/state.js').then((m) => {
+  const s = m.screens.get(${JSON.stringify(file)});
+  return { x: s.x, y: s.y, pinned: s.pinned };
+})`);
+/** @type {(file: string) => Promise<boolean>} */
+const zoneHas = (file) => board.evaluate(`(() => {
+  const zone = ${zoneOf('grupo')};
+  const card = ${cardOf(file)};
+  return !!zone && card.offsetLeft >= zone.offsetLeft && card.offsetTop >= zone.offsetTop
+    && card.offsetLeft + card.offsetWidth <= zone.offsetLeft + zone.offsetWidth
+    && card.offsetTop + card.offsetHeight <= zone.offsetTop + zone.offsetHeight;
+})()`);
+
+await checkEventually('o fundo da pasta volta a envolver as telas depois de restaurar', zoneEncloses);
+const beforeGroupDrag = await screenState('grupo/um.html');
+const groupDragScale = await board.evaluate("import('/app/state.js').then((m) => m.view.scale)");
+await board.evaluate(`(() => {
+  const label = ${zoneOf('grupo')}.querySelector('.folder-zone-name');
+  const box = label.getBoundingClientRect();
+  const at = (type, dx) => new PointerEvent(type, {
+    pointerId: 31, button: 0, bubbles: true, cancelable: true,
+    clientX: box.left + 4 + dx, clientY: box.top + 4 + dx,
+  });
+  label.dispatchEvent(at('pointerdown', 0));
+  label.dispatchEvent(at('pointermove', 120));
+  label.dispatchEvent(at('pointerup', 120));
+})()`);
+const afterGroupDrag = await screenState('grupo/um.html');
+const expectedShift = Math.round(120 / groupDragScale);
+check('arrastar o nome da pasta move o grupo inteiro',
+  Math.abs(afterGroupDrag.x - beforeGroupDrag.x - expectedShift) <= 2
+  && Math.abs(afterGroupDrag.y - beforeGroupDrag.y - expectedShift) <= 2,
+  `${beforeGroupDrag.x},${beforeGroupDrag.y} -> ${afterGroupDrag.x},${afterGroupDrag.y} (esperado +${expectedShift})`);
+check('as telas do grupo movido continuam do layout (nao viram fixas)', !afterGroupDrag.pinned);
+check('o lugar do grupo fica gravado', await board.evaluate(
+  "Object.keys(localStorage).filter((k) => k.startsWith('pinacoteca:folders:'))"
+  + ".some((k) => JSON.parse(localStorage.getItem(k)).origins?.grupo)"));
+await checkEventually('o fundo acompanha o grupo movido', zoneEncloses);
+
+// Todas as telas movidas a mao: o fundo fica com a ultima movida.
+await board.evaluate(`import('/app/view.js').then((m) => {
+  m.moveScreen('grupo/um.html', 20000, 20000);
+  m.moveScreen('grupo/dois.html', 30000, 30000);
+})`);
+check('com todas movidas, o fundo segue a ultima tela movida',
+  (await zoneHas('grupo/dois.html')) && !(await zoneHas('grupo/um.html')));
+
+// Largar a outra tela encostada na ultima movida: o fundo a acolhe.
+await board.evaluate(`import('/app/state.js').then(async (state) => {
+  const view = await import('/app/view.js');
+  const dois = state.screens.get('grupo/dois.html');
+  view.moveScreen('grupo/um.html', dois.x + dois.frameWidth + 72, dois.y);
+  view.moveScreen('grupo/dois.html', dois.x, dois.y);
+})`);
+check('tela encostada na ultima movida entra no fundo da pasta',
+  (await zoneHas('grupo/dois.html')) && (await zoneHas('grupo/um.html')));
+
+// Menu do nome da pasta.
+await board.evaluate(`${zoneOf('grupo')}.querySelector('.folder-zone-menu-btn').click()`);
+check('o botao do nome abre o menu da pasta', await board.evaluate(
+  `${zoneOf('grupo')}.classList.contains('has-open-menu')`
+  + ` && getComputedStyle(${zoneOf('grupo')}.querySelector('.folder-zone-menu')).display !== 'none'`));
+
+await board.evaluate(`(() => {
+  const input = ${zoneOf('grupo')}.querySelector('.folder-zone-color');
+  input.value = '#2266aa';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+})()`);
+check('mudar cor pelo menu do board pinta as telas da pasta',
+  (await folderColorOf(cardOf('grupo/um.html'))) === '#2266aa');
+
+// Afasta uma das duas para provar que o reagrupar traz de volta.
+await board.evaluate("import('/app/view.js').then((m) => m.moveScreen('grupo/um.html', -40000, -40000))");
+await board.evaluate(`${zoneOf('grupo')}.querySelector('[data-action="regroup"]').click()`);
+await checkEventually('reagrupar traz as telas de volta ao grupo, soltas', async () => {
+  const um = await screenState('grupo/um.html');
+  const dois = await screenState('grupo/dois.html');
+  return !um.pinned && !dois.pinned && (await zoneEncloses());
+});
+check('reagrupar fecha o menu', await board.evaluate(`!${zoneOf('grupo')}.classList.contains('has-open-menu')`));
+
+
 /* ---------- Servidor ---------- */
 
 process.stdout.write('\nServidor\n');

@@ -159,11 +159,117 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Indentacao por nivel: filhos recuam alem do caret da pasta pai. */
+/* Indentacao por nivel: filhos recuam alem do caret da pasta pai. A linha de
+   recuo leva a cor da pasta. */
 .folder-children {
   margin-left: 10px;
   border-left: 1px solid var(--border);
   padding-left: 4px;
+}
+
+.tree-folder[data-folder-path] > .folder-children {
+  border-left-color: color-mix(in srgb, var(--folder-color) 55%, transparent);
+}
+
+/* Cabecalho: o botao de colapso ocupa o que sobra; cor e "apagar" ao lado. */
+.folder-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.folder-head .folder-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--folder-color, var(--text-muted));
+}
+
+/* O seletor nativo vira uma bolinha na cor da pasta. */
+.folder-color {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+
+.folder-color::-webkit-color-swatch-wrapper { padding: 0; }
+.folder-color::-webkit-color-swatch { border: 0; border-radius: 50%; }
+.folder-color::-moz-color-swatch { border: 0; border-radius: 50%; }
+
+.folder-remove {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.folder-remove:hover {
+  background: #262b33;
+  color: var(--danger);
+}
+
+.folder-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 3px 4px;
+  padding: 3px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+/* Folha numa pasta: a bolinha da cor ao lado do nome. */
+.screen-item[data-folder-path]::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--folder-color);
+  vertical-align: 1px;
+}
+
+/* Pasta (ou a raiz da lista) sob um arrasto da sidebar. */
+.tree-folder.is-drop-target > .folder-head,
+.screen-list.is-drop-target {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+  border-radius: 6px;
+}
+
+.folder-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 8px 0;
+}
+
+.folder-actions button {
+  flex: 1 1 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.folder-actions button:hover {
+  background: #262b33;
+  color: var(--text);
 }
 
 /* Pisca quando o arquivo correspondente muda no disco. */
@@ -1077,6 +1183,129 @@ body {
   will-change: transform;
 }
 
+/* ---------- Fundo das pastas ---------- */
+
+/* Retangulo atras das telas de uma pasta (refreshFolderZones, em view.js). Nao
+   pega ponteiro: o pan, o arrasto e o clique continuam sendo das telas e do
+   board. */
+.folder-zone {
+  position: absolute;
+  border: 1px solid color-mix(in srgb, var(--folder-color) 45%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--folder-color) 10%, transparent);
+  pointer-events: none;
+}
+
+/* O nome da pasta, contra-escalado como o titulo do card: legivel em qualquer
+   zoom, ancorado no canto de cima do fundo. E a alca do grupo inteiro: so ele
+   pega ponteiro no fundo. A largura acompanha o conteudo (ate a do fundo), para
+   a alca nao roubar o pan de uma faixa vazia. */
+.folder-zone-label {
+  position: absolute;
+  top: 12px;
+  left: 18px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc((100% - 36px) * var(--scale, 1));
+  color: var(--folder-color);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  transform: scale(var(--inv-scale, 1));
+  transform-origin: 0 0;
+  pointer-events: auto;
+  cursor: move;
+  user-select: none;
+}
+
+#viewport.is-dragging .folder-zone-label {
+  cursor: grabbing;
+}
+
+.folder-zone-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-zone-menu-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--folder-color) 18%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* O fundo mora atras dos cards; com o menu aberto o nome sobe acima deles, senao
+   o menu desceria por baixo das telas. O fundo nao e contexto de empilhamento,
+   entao o z-index do nome vale no canvas. */
+.folder-zone.has-open-menu .folder-zone-label {
+  z-index: 3;
+}
+
+.folder-zone-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  display: none;
+  min-width: 160px;
+  margin-top: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+  cursor: default;
+}
+
+.folder-zone.has-open-menu .folder-zone-menu {
+  display: block;
+}
+
+.folder-zone-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-zone-option:hover {
+  background: #262b33;
+}
+
+.folder-zone-color {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.folder-zone-color::-webkit-color-swatch-wrapper { padding: 0; }
+.folder-zone-color::-webkit-color-swatch { border: 0; border-radius: 50%; }
+.folder-zone-color::-moz-color-swatch { border: 0; border-radius: 50%; }
+
 /* ---------- Card ---------- */
 
 .card {
@@ -1131,6 +1360,21 @@ body {
 
 /* O nome trunca; o `min-width: 0` e o que deixa um item flex encolher abaixo
    do proprio conteudo — sem ele o botao seria empurrado para fora do card. */
+/* Cor da pasta da tela (folders.js). Tela na raiz nao tem pasta nem bolinha. */
+.card-folder-dot {
+  display: none;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--folder-color);
+}
+
+.card[data-folder-path] .card-folder-dot {
+  display: inline-block;
+}
+
 .card-title-label {
   flex: 1 1 auto;
   min-width: 0;

@@ -594,7 +594,8 @@ Sem framework e sem bundler, mas dividido em módulos ES nativos. `index.html` c
 | `src/client/storage.js` | o que o board lembra entre sessões, no `localStorage` |
 | `src/client/view.js` | câmera: zoom, pan e layout dos cards |
 | `src/client/cards.js` | criação, recarga e medida de cada tela |
-| `src/client/sidebar.js` | árvore de telas por pasta |
+| `src/client/folders.js` | pasta efetiva de cada tela, cor de cada pasta e os gestos que reorganizam as pastas |
+| `src/client/sidebar.js` | árvore de telas por pasta: desenho, arrastar e soltar, renomear |
 | `src/client/inspect.js` | modo ponteiro e captura de XPath |
 | `src/client/feedback.js` | toast e área de transferência |
 | `src/client/controls.js` | listeners de mouse, teclado, toolbar e a largura da sidebar |
@@ -637,7 +638,8 @@ Duas regras seguram essa divisão:
   (`tabs.js`; a aba ativa é `ui.activeTab`). Ela virou o lugar das duas coisas que se faz
   com o board — ver o que existe e pedir uma mudança — e o canvas continua inteiro para os
   protótipos. Nenhum dos dois painéis sabe da existência do outro.
-- **Aba Telas** — árvore de telas agrupadas por pasta. Cada pasta é um cabeçalho colapsável
+- **Aba Telas** — árvore de telas agrupadas por pasta *efetiva* — a real, ou a escolhida
+  pelo navegador (veja "Pastas"); cada pasta mostra a cor dela. Cada pasta é um cabeçalho colapsável
   (o estado de colapso vive num `Set` no cliente e persiste entre re-renders de add/remove);
   a folha mostra só o nome do arquivo, já que o caminho vem do cabeçalho. Clicar numa folha
   centraliza o board naquele card. O rodapé mostra a raiz observada e, embaixo, o estado da
@@ -778,8 +780,11 @@ O zoom é aplicado via `transform: scale()` no container do board, não redimens
 iframes — assim o conteúdo não sofre reflow ao dar zoom, e o resultado é o comportamento
 de canvas que se espera.
 
-Os cards são distribuídos em colunas (`⌈√n⌉`), cada um indo para a coluna mais curta no
-momento. Cada coluna tem a largura da tela mais larga **dela**, não a do card mais largo do
+As telas que escorrem são agrupadas pela pasta (veja "Pastas"), e cada pasta vira um
+bloco; os blocos se arrumam em prateleiras, da esquerda para a direita, quebrando a linha
+em `shelfWidth`. Dentro de cada bloco, os cards são distribuídos em colunas (`⌈√n⌉`), cada
+um indo para a coluna mais curta no momento. Um board sem pastas tem um bloco só, na
+origem e sem folga, e sai exatamente como saía antes. Cada coluna tem a largura da tela mais larga **dela**, não a do card mais largo do
 board: uma única tela desktop não espalha as estreitas por slots de 1280px. Daí a
 distribuição (`assignColumns`, em `utils.js`) vir antes do posicionamento — a largura de uma
 coluna só existe depois de se saber quem caiu nela. O layout é recalculado quando um card
@@ -845,6 +850,7 @@ O `storage.js` guarda duas famílias, e a divisão entre elas é o que a chave c
 | O que | Chave | Por quê |
 | --- | --- | --- |
 | Posições e tamanhos das telas | por raiz observada | é a organização *daquela* pasta |
+| Pastas: tela movida, pasta criada, matiz sorteado, cor escolhida | por raiz observada | idem — e é o que faz reorganizar pastas nunca tocar o disco |
 | Rascunho do compositor | por raiz observada | conversa em andamento é sobre aquela pasta; o texto não enviado de uma não deve vazar para o board de outra |
 | Histórico de mensagens enviadas | por raiz observada | a seta pra cima só deve trazer o que foi pedido àquele board |
 | Qual conversa está aberta | por raiz observada | o *conteúdo* da conversa é do servidor; qual delas se está olhando é do navegador, e duas janelas na mesma pasta podem estar em conversas diferentes |
@@ -858,6 +864,97 @@ o lado que escreve, então ele mora só na configuração do servidor.
 Limite conhecido: uma tela fixa pode virar inválida sozinha, quando o conteúdo dela cresce
 e o card passa a invadir o vizinho. Ela fica vermelha, mas a posição já gravada continua
 gravada — ela era válida quando foi salva.
+
+#### Pastas
+
+A pasta de cada tela começa sendo a pasta real do arquivo, e pode ser trocada pelo
+navegador: arrastar a folha para outra pasta da sidebar, arrastar uma pasta para dentro de
+outra (as telas, as subpastas e as cores escolhidas vão junto), criar uma pasta vazia
+("Nova pasta", que já nasce pedindo nome), renomear com duplo clique, apagar uma pasta
+vazia. "Restaurar pastas" volta tudo às pastas reais.
+
+**Isso só existe no navegador.** Mover uma tela de pasta não move o arquivo: o board
+continua só olhando, e mover de verdade quebraria os caminhos relativos de CSS e imagem
+do protótipo. A organização vive no `localStorage`, por raiz observada (`loadFolders`), em
+`folders` de `state.js`: `overrides` (a pasta efetiva de cada tela que mudou de lugar —
+quem não está ali está na pasta real), `extra` (pastas criadas, que existem mesmo vazias),
+`hues`, `colors`, `origins` e `lastMoved` (os dois últimos explicados em "Fundo da
+pasta"). Quem muda é só `folders.js`, que grava e avisa por
+`notifyFoldersChange`; `board.js` liga isso a `renderSidebar`, `paintAllScreens` e
+`layout`. `folders.js` não conhece nenhum dos três, e é isso que deixa a sidebar e o
+layout lerem a pasta efetiva (`folderOf`) sem ciclo de import.
+
+**Cor.** Cada pasta de topo ganha um matiz sorteado na primeira vez em que aparece
+(fugindo dos que já existem, para vizinhas não saírem quase iguais), gravado em `hues`
+para não mudar a cada carga. Subpasta não sorteia: `subfolderShade` dá a ela outro tom da
+cor do pai, com o deslocamento tirado do *nome* da subpasta — duas irmãs saem diferentes,
+e uma pasta nova não muda a cor das que já existiam. A cor escolhida pelo usuário
+(`colors`, pelo seletor ao lado do nome da pasta) vence as duas, e como o tom da subpasta
+sai da cor do pai *já resolvida* (`folderColor`), trocar a cor de uma pasta arrasta junto
+as subpastas sem cor própria. Botão direito no seletor esquece a escolha.
+
+Enquanto o seletor está aberto cada `input` recolore ao vivo, sem remontar nada: todo
+elemento com cor de pasta leva `data-folder-path` e a variável `--folder-color`
+(`paintElement`), e o recolorir só reescreve a variável. Remontar a sidebar tiraria do
+DOM o próprio seletor aberto. A cor é gravada no `change`.
+
+A cor aparece numa bolinha ao lado do nome no título do card, na folha da sidebar, no
+cabeçalho e na linha de recuo da pasta, e no **fundo** da pasta no board.
+
+**Fundo da pasta.** Cada bloco do layout ganha um retângulo suave na cor da pasta, com o
+nome dela no topo (`refreshFolderZones`, em `view.js`). Ele não pega ponteiro, e mora no
+começo do canvas para ficar atrás dos cards sem disputar `z-index`. A folga e a faixa do
+nome (`FOLDER_ZONE_PAD`, `FOLDER_ZONE_LABEL`) são reservadas no próprio bloco, então o
+fundo de uma pasta nunca cobre a tela de outra. O nome é contra-escalado como o título do
+card.
+
+**Quem o fundo envolve** é um conjunto ligado (`folderGroup`). A semente são as telas da
+pasta que o layout posiciona — as fixadas pelo tamanho global contam como dele
+(`autoPinned`). Quando não sobrou nenhuma, porque o usuário moveu todas, a semente é a
+**última tela movida** da pasta (`folders.lastMoved`, marcada em `moveScreen` e gravada).
+Dali, toda tela da mesma pasta que encosta numa do conjunto entra, em cadeia
+(`connectedFrom`, com o vão máximo `FOLDER_REACH`, um pouco além do `GAP` para o vão do
+próprio layout sempre ligar). Três consequências, todas pedidas: o fundo nunca some
+enquanto a pasta tiver tela; ele acompanha a última tela movida; e uma tela largada ao
+lado do grupo é acolhida por ele. Uma tela arrastada para longe enquanto o resto do grupo
+ainda é do layout sai do fundo e fica com a cor da pasta só no título — o fundo fica com
+o grupo, não com ela. O fundo é recalculado em `refreshOverlaps`, que já roda depois de
+todo movimento, e por isso os fundos são **reaproveitados por pasta**, e não remontados:
+remontar a cada passo de um arrasto fecharia o menu e o seletor de cor abertos. Telas na
+raiz não têm fundo nem cor.
+
+**Mover o grupo.** O nome da pasta no board é a alça do grupo inteiro: é a única parte do
+fundo que pega ponteiro, e o pan o deixa passar como deixa o título do card. Arrastar leva
+tudo que o fundo envolve naquele instante, pelo mesmo deslocamento. As telas do layout
+**não viram fixas**: o que se grava é a **origem do bloco** (`folders.origins`, o canto do
+fundo, em px de canvas), e o `layout` passa a pôr aquele bloco ali em vez de na
+prateleira. Assim tela nova da pasta entra no grupo e redimensionar reacomoda o arranjo,
+como antes. Bloco com origem vira obstáculo para os da prateleira, como uma tela fixa. As
+telas movidas à mão que estavam encostadas andam junto e continuam fixas. Durante o gesto
+o layout não roda — os outros blocos tremeriam embaixo do cursor —; ele roda uma vez no
+fim (`endGroupDrag`). O snap-to-grid vale para a origem. "Reorganizar" esquece as origens
+(`clearGroupOrigins`); mover ou renomear pasta leva a origem junto.
+
+**Menu do nome.** Um ▾ ao lado do nome abre o menu da pasta (`ui.openFolderMenu`, um por
+vez; fecha no clique fora e no `Esc`). **Reagrupar telas** solta todas as telas da pasta —
+nem movidas, nem fixas pelo tamanho global —, esquece a posição salva delas e deixa o
+layout arrumá-las dentro do bloco; se o bloco ainda não tinha origem, ganha uma no canto do
+fundo atual, para o grupo se reorganizar onde está em vez de saltar para a prateleira.
+**Mudar cor** é o mesmo seletor da sidebar. Com o menu aberto, o nome sobe acima dos cards
+(`z-index` do nome, que vale no canvas porque o fundo não é contexto de empilhamento); senão
+o menu desceria por baixo das telas.
+
+Limites conhecidos: arrastar o grupo não entra no desfazer/refazer, que é de tela. E
+reagrupar apaga o registro salvo das telas — um tamanho escolhido à mão continua valendo
+na sessão, mas é remedido na próxima carga, porque só tela fixa grava tamanho.
+
+Desviar das telas fixas também muda de granularidade: um bloco de pasta desce
+**inteiro**, para o fundo continuar envolvendo um grupo só; a raiz desce tela a tela, como
+o layout sempre fez. A linha seguinte de prateleiras começa abaixo do que a anterior de
+fato ocupou, depois desse desvio.
+
+Limite conhecido: a organização é chaveada pelo caminho real da tela. Renomear o arquivo
+no disco faz dele uma tela nova, que volta à pasta real.
 
 #### Tamanho escolhido pelo usuário
 
@@ -1191,7 +1288,9 @@ resolução de caminho seguro, política de arquivo proibido, árvore da sidebar
 validação da configuração (`mergeConfig`, `publicConfig`), e do lado do agente
 `escapingPath`, `buildDiff`, `answeredInput`, `translateMessage`, `agentEnv` e
 `hasCredential`, mais a validação das perguntas que chegam do modelo
-(`normalizeQuestions`). São decisões que cabem em entrada e saída, e testar cada uma custa
+(`normalizeQuestions`), o parser de markdown (`parseMarkdown`, `parseInline`) e as contas
+das pastas (`folderColor`, `subfolderShade`, `relocatePath`, `shelfWidth`, `rectGap`,
+`connectedFrom`). São decisões que cabem em entrada e saída, e testar cada uma custa
 milissegundos.
 
 O `storage.js` do cliente é a exceção que precisou de um arranjo: ele lê e escreve
@@ -1321,6 +1420,10 @@ E o que **fica por conta do usuário**, dito sem rodeio:
    | Zoom, pan, posição dos cards | `src/client/view.js` |
    | O que o board lembra entre sessões | `src/client/storage.js` |
    | O que um card mostra ou mede | `src/client/cards.js` |
+   | Pasta de uma tela, cor de pasta, mover/criar/renomear pasta | `src/client/folders.js` (estado e gestos), `src/client/sidebar.js` (árvore e arrasto), `src/client/utils.js` (cor e árvore, puras) |
+   | Fundo das pastas, o grupo visual, o layout em blocos e o menu do nome | `src/client/view.js` (`layout`, `folderGroup`, `refreshFolderZones`, `regroupFolder`), `src/client/utils.js` (`connectedFrom`) |
+   | Arrastar o grupo pelo nome da pasta | `src/client/controls.js` (o gesto), `src/client/view.js` (`beginGroupDrag`, `dragGroup`, `endGroupDrag`) |
+   | Markdown da resposta do agente | `src/client/markdown.js` |
    | O tamanho de todas as telas de uma vez | `src/client/cards.js` (`applyGlobalSize`), `src/client/controls.js` (o menu da toolbar) |
    | Tela sobreposta: marcar ou separar | `src/client/view.js` (`refreshOverlaps`, `separateCollisions`), `src/client/utils.js` (a conta) |
    | Atalho de teclado, botão, gesto | `src/client/controls.js` |

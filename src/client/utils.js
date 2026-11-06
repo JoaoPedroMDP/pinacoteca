@@ -293,19 +293,44 @@ export function serializeCommentQueue(queue) {
  */
 
 /**
- * Monta uma arvore de pastas a partir dos caminhos relativos das telas.
+ * Pasta real de um arquivo: o caminho sem o nome. Arquivo na raiz da `''`.
+ * @param {string} file
+ * @returns {string}
+ */
+export function dirnameOf(file) {
+  const slash = file.lastIndexOf('/');
+  return slash < 0 ? '' : file.slice(0, slash);
+}
+
+/**
+ * Ultimo pedaco de um caminho: o nome do arquivo ou da pasta.
+ * @param {string} path
+ * @returns {string}
+ */
+export function basenameOf(path) {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+
+/**
+ * Monta uma arvore de pastas a partir das telas.
+ *
+ * A pasta de cada tela sai de `folderOf` — por padrao a pasta real, mas o board
+ * passa a pasta *efetiva*, que o usuario pode ter trocado no navegador. As
+ * folhas continuam guardando o caminho real: e por ele que a tela e achada.
+ *
  * @param {string[]} files
+ * @param {(file: string) => string} [folderOf]
+ * @param {Iterable<string>} [extraDirs] pastas que existem mesmo vazias
  * @returns {TreeNode} a raiz, cujo `path` e a string vazia
  */
-export function buildTree(files) {
+export function buildTree(files, folderOf = dirnameOf, extraDirs = []) {
   /** @type {TreeNode} */
   const root = { path: '', dirs: new Map(), files: [] };
 
-  for (const file of files) {
-    const parts = file.split('/');
+  /** @param {string} folder */
+  const ensure = (folder) => {
     let node = root;
-    for (let i = 0; i < parts.length - 1; i += 1) {
-      const name = parts[i];
+    for (const name of folder ? folder.split('/') : []) {
       let child = node.dirs.get(name);
       if (!child) {
         child = { path: node.path ? `${node.path}/${name}` : name, dirs: new Map(), files: [] };
@@ -313,9 +338,174 @@ export function buildTree(files) {
       }
       node = child;
     }
-    node.files.push(file);
-  }
+    return node;
+  };
+
+  for (const dir of extraDirs) ensure(dir);
+  for (const file of files) ensure(folderOf(file)).files.push(file);
   return root;
+}
+
+/**
+ * Leva um caminho de pasta de `from` para `to`, se ele estiver em `from` ou
+ * abaixo dela. Fora disso volta igual. E o que mover ou renomear uma pasta faz
+ * com cada caminho que ela continha.
+ * @param {string} path
+ * @param {string} from
+ * @param {string} to
+ * @returns {string}
+ */
+export function relocatePath(path, from, to) {
+  if (path === from) return to;
+  if (!path.startsWith(`${from}/`)) return path;
+  const rest = path.slice(from.length + 1);
+  return to ? `${to}/${rest}` : rest;
+}
+
+/**
+ * `#rrggbb` para HSL (graus, porcentagem, porcentagem).
+ * @param {string} hex
+ * @returns {{ h: number, s: number, l: number }}
+ */
+export function hexToHsl(hex) {
+  const value = Number.parseInt(hex.slice(1), 16);
+  const r = ((value >> 16) & 255) / 255;
+  const g = ((value >> 8) & 255) / 255;
+  const b = (value & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return { h: 0, s: 0, l: Math.round(l * 100) };
+
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let h;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return { h: Math.round((h * 60 + 360) % 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+/**
+ * HSL para `#rrggbb` — o formato que o `<input type="color">` entende.
+ * @param {number} h graus
+ * @param {number} s porcentagem
+ * @param {number} l porcentagem
+ * @returns {string}
+ */
+export function hslToHex(h, s, l) {
+  const sat = clamp(s, 0, 100) / 100;
+  const light = clamp(l, 0, 100) / 100;
+  const a = sat * Math.min(light, 1 - light);
+  /** @param {number} n */
+  const channel = (n) => {
+    const k = (n + ((h % 360) + 360) % 360 / 30) % 12;
+    const value = light - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(value * 255).toString(16).padStart(2, '0');
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+}
+
+/** Saturacao e luminosidade da cor de uma pasta de topo. */
+export const FOLDER_BASE_SL = { s: 62, l: 56 };
+
+/**
+ * Tom de uma subpasta: a mesma familia de cor do pai, com outra luminosidade.
+ *
+ * O deslocamento sai do *nome* da subpasta, e nao da posicao dela entre as
+ * irmas: duas irmas ficam diferentes uma da outra, e uma pasta nova nao troca
+ * a cor das que ja existiam.
+ *
+ * @param {string} parentHex
+ * @param {string} name
+ * @returns {string}
+ */
+export function subfolderShade(parentHex, name) {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
+  const { h, s, l } = hexToHsl(parentHex);
+  const step = [14, 22, -14, -22][hash % 4];
+  // Sem espaco para o lado escolhido, vai para o outro: o tom nunca encosta no
+  // branco nem no preto, onde todas as subpastas pareceriam iguais.
+  const target = l + step > 88 || l + step < 22 ? l - step : l + step;
+  const hueShift = (Math.floor(hash / 4) % 3 - 1) * 8;
+  return hslToHex(h + hueShift, s - 6, target);
+}
+
+/**
+ * Cor de uma pasta: a escolhida pelo usuario, se houver; senao, para a pasta de
+ * topo, o matiz sorteado para ela; para subpasta, um tom da cor do pai.
+ *
+ * Como o tom sai da cor do pai *ja resolvida*, trocar a cor de uma pasta muda
+ * junto as subpastas que nao tem cor propria.
+ *
+ * @param {string} path pasta efetiva, nunca a raiz
+ * @param {Record<string, number>} hues matiz sorteado de cada pasta de topo
+ * @param {Record<string, string>} colors cor escolhida pelo usuario, por pasta
+ * @returns {string}
+ */
+export function folderColor(path, hues, colors) {
+  const chosen = colors[path];
+  if (chosen) return chosen;
+  const parent = dirnameOf(path);
+  if (!parent) return hslToHex(hues[path] ?? 0, FOLDER_BASE_SL.s, FOLDER_BASE_SL.l);
+  return subfolderShade(folderColor(parent, hues, colors), basenameOf(path));
+}
+
+/**
+ * Distancia entre duas caixas: o maior dos vaos, horizontal e vertical. Zero
+ * quando se tocam ou se sobrepoem. Duas telas na diagonal contam pelo vao maior,
+ * entao uma quina perto da outra tambem e "encostada".
+ * @param {Rect} a
+ * @param {Rect} b
+ * @returns {number}
+ */
+export function rectGap(a, b) {
+  const dx = Math.max(0, b.x - (a.x + a.width), a.x - (b.x + b.width));
+  const dy = Math.max(0, b.y - (a.y + a.height), a.y - (b.y + b.height));
+  return Math.max(dx, dy);
+}
+
+/**
+ * Indices das caixas ligadas as sementes por uma cadeia de vizinhas a no
+ * maximo `reach` uma da outra. E o grupo visual de uma pasta: as sementes e
+ * toda tela que encosta nelas, e as que encostam nessas, e assim por diante.
+ * @param {Rect[]} rects
+ * @param {number[]} seeds indices de partida
+ * @param {number} reach
+ * @returns {Set<number>}
+ */
+export function connectedFrom(rects, seeds, reach) {
+  const found = new Set(seeds);
+  const queue = [...seeds];
+  while (queue.length > 0) {
+    const current = /** @type {number} */ (queue.shift());
+    rects.forEach((rect, index) => {
+      if (found.has(index) || rectGap(rects[current], rect) > reach) return;
+      found.add(index);
+      queue.push(index);
+    });
+  }
+  return found;
+}
+
+/** Quanto a prateleira passa do lado do quadrado de mesma area: o monitor e largo. */
+const SHELF_ASPECT = 1.3;
+
+/**
+ * Ate que largura uma prateleira de blocos (um bloco por pasta) cresce antes de
+ * quebrar a linha. Sai da area total — o board tende a um retangulo perto do
+ * quadrado, como o layout em `⌈√n⌉` colunas —, mas nunca e menor que o bloco
+ * mais largo, senao ele ficaria sozinho numa linha que ele mesmo estoura.
+ *
+ * @param {Array<{ width: number, height: number }>} sizes
+ * @param {number} gap espaco entre blocos
+ * @returns {number}
+ */
+export function shelfWidth(sizes, gap) {
+  const area = sizes.reduce((sum, size) => sum + (size.width + gap) * (size.height + gap), 0);
+  const widest = sizes.reduce((max, size) => Math.max(max, size.width), 0);
+  return Math.max(widest, Math.sqrt(area) * SHELF_ASPECT);
 }
 
 /**

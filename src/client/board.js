@@ -11,6 +11,7 @@
 //   storage.js    organizacao das telas, no localStorage
 //   view.js       camera: zoom, pan e layout dos cards
 //   cards.js      criacao, recarga e medida de cada tela
+//   folders.js    pasta efetiva de cada tela, cores e reorganizacao
 //   sidebar.js    arvore de telas por pasta
 //   inspect.js    modo ponteiro e captura de XPath
 //   feedback.js   toast e area de transferencia
@@ -21,11 +22,12 @@
 //   chat-client.js  transporte da conversa: as rotas /api/chat/
 
 import { rootPath, version } from './dom.js';
-import { source } from './state.js';
+import { onFoldersChange, source } from './state.js';
 import { SIDEBAR_DEFAULT_WIDTH } from './constants.js';
 import { loadSidebarWidth, loadSnapToGrid } from './storage.js';
+import { initFolders, paintAllScreens } from './folders.js';
 import { createCard } from './cards.js';
-import { renderSidebar } from './sidebar.js';
+import { initFolderControls, renderSidebar } from './sidebar.js';
 import { applyTransform, fitToScreen, layout } from './view.js';
 import { connectEvents } from './sse.js';
 import { setSidebarWidth, setSnapToGrid } from './controls.js'; // tambem registra os listeners
@@ -53,6 +55,8 @@ async function loadScreens() {
   // Antes de montar card nenhum: e a raiz que diz qual organizacao salva e desta
   // pasta, e `createCard` ja consulta essa organizacao.
   source.root = data.root;
+  // Idem para as pastas: `createCard` ja pinta a tela com a cor da pasta dela.
+  initFolders();
 
   for (const file of data.screens) createCard(file);
   renderSidebar();
@@ -66,6 +70,14 @@ setSnapToGrid(loadSnapToGrid());
 // o viewport e o que sobra depois da sidebar.
 setSidebarWidth(loadSidebarWidth() || SIDEBAR_DEFAULT_WIDTH);
 showTab('sidebar', 'screens');
+initFolderControls();
+// Mudou a pasta de alguma tela: a arvore, a cor de cada tela e os blocos do
+// layout saem todos da organizacao nova.
+onFoldersChange(() => {
+  renderSidebar();
+  paintAllScreens();
+  layout();
+});
 await loadScreens();
 // Depois da carga de proposito: o rascunho e o historico da conversa sao por
 // raiz observada, e a raiz so e conhecida a partir de `/api/screens`.

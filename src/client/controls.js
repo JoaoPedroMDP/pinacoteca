@@ -7,8 +7,9 @@
 import { globalSizeMenu, sidebarResizer, toolbar, viewport } from './dom.js';
 import { screens, ui, view } from './state.js';
 import {
-  applyTransform, finishResize, fitToScreen, moveScreen, panBy, persistPositions,
-  recordMove, redo, resetPositions, resetZoom, resizeScreen, undo, zoomAt, zoomByStep,
+  applyTransform, beginGroupDrag, dragGroup, endGroupDrag, finishResize, fitToScreen, moveScreen,
+  panBy, persistPositions, recordMove, redo, resetPositions, resetZoom, resizeScreen,
+  setFolderMenu, undo, zoomAt, zoomByStep,
 } from './view.js';
 import { applyGlobalSize, closeSizeMenu, resetSizes, setInteractive } from './cards.js';
 import {
@@ -189,6 +190,8 @@ viewport.addEventListener('pointerdown', (event) => {
   // O titulo e a alca de arrasto da tela: ali o gesto move o card, nao o board.
   // Vale o titulo inteiro, inclusive o botao de tamanho — que precisa do clique.
   if (/** @type {Element} */ (event.target).closest?.('.card-title')) return;
+  // O nome da pasta no board e a alca do grupo inteiro (veja o arrasto abaixo).
+  if (/** @type {Element} */ (event.target).closest?.('.folder-zone-label')) return;
   // Nas bordas do frame o gesto redimensiona a tela.
   if (resizeTarget(event)) return;
   // A toolbar fica dentro do viewport: sem isto o setPointerCapture abaixo
@@ -318,6 +321,65 @@ function endDrag(event) {
 viewport.addEventListener('pointerup', endDrag);
 viewport.addEventListener('pointercancel', endDrag);
 
+/* ---------- Arrasto do nome da pasta: mover o grupo ---------- */
+
+// Estado do gesto em andamento: nasce no pointerdown e morre no pointerup.
+/** @type {number | null} */
+let groupPointerId = null;
+/** @type {import('./view.js').GroupDrag | null} */
+let groupDrag = null;
+let groupStartX = 0;
+let groupStartY = 0;
+
+viewport.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.altKey) return;
+  const target = /** @type {Element | null} */ (event.target);
+  // O botao e o menu do nome sao para clicar, nao para arrastar.
+  if (target?.closest?.('.folder-zone-menu-btn, .folder-zone-menu')) return;
+  const zone = target?.closest?.('.folder-zone-label')?.parentElement;
+  const folder = zone instanceof HTMLElement ? zone.dataset.folderPath : undefined;
+  if (!folder) return;
+
+  const drag = beginGroupDrag(folder);
+  if (!drag) return;
+  event.preventDefault(); // senao o arrasto vira selecao do nome
+
+  const point = canvasPoint(event);
+  groupPointerId = event.pointerId;
+  groupDrag = drag;
+  groupStartX = point.x;
+  groupStartY = point.y;
+  viewport.classList.add('is-dragging');
+  try {
+    viewport.setPointerCapture(event.pointerId);
+  } catch {
+    // Ponteiro sintetico (teste): os listeners do viewport dao conta.
+  }
+});
+
+viewport.addEventListener('pointermove', (event) => {
+  if (event.pointerId !== groupPointerId || !groupDrag) return;
+  const point = canvasPoint(event);
+  dragGroup(groupDrag, point.x - groupStartX, point.y - groupStartY);
+});
+
+/** @param {PointerEvent} event */
+function endGroupGesture(event) {
+  if (event.pointerId !== groupPointerId) return;
+  groupPointerId = null;
+  viewport.classList.remove('is-dragging');
+  if (groupDrag) endGroupDrag(groupDrag);
+  groupDrag = null;
+  try {
+    viewport.releasePointerCapture(event.pointerId);
+  } catch {
+    // Ponteiro sintetico (teste) ou ja liberado: nada a fazer.
+  }
+}
+
+viewport.addEventListener('pointerup', endGroupGesture);
+viewport.addEventListener('pointercancel', endGroupGesture);
+
 /* ---------- Arrasto das bordas: redimensionar a tela ---------- */
 
 // Estado do gesto em andamento. Segue o padrao do pan, e nao o do titulo: o
@@ -415,6 +477,9 @@ viewport.addEventListener('click', (event) => {
   const target = /** @type {Element | null} */ (event.target);
   if (ui.openSizeMenuFile && !target?.closest?.('.card-resize-btn, .card-size-menu')) {
     closeSizeMenu();
+  }
+  if (ui.openFolderMenu && !target?.closest?.('.folder-zone-menu-btn, .folder-zone-menu')) {
+    setFolderMenu(null);
   }
   // O menu global mora na toolbar, que fica dentro do viewport: o clique nele
   // chega aqui tambem, e sem esta guarda o proprio gesto de abrir fecharia.
@@ -571,6 +636,7 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     setInteractive(null);
     closeSizeMenu();
+    setFolderMenu(null);
     return;
   }
 

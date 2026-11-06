@@ -354,3 +354,93 @@ export function saveChatPrefs(prefs) {
     // Sem espaco ou sem permissao: segue funcionando, so nao lembra.
   }
 }
+
+// A organizacao em pastas e por raiz observada, como as posicoes: as pastas de
+// um board nao tem nada a ver com as de outro.
+const FOLDERS_KEY_PREFIX = 'pinacoteca:folders:';
+
+/** @returns {string} */
+function foldersKey() {
+  return `${FOLDERS_KEY_PREFIX}${source.root}`;
+}
+
+/**
+ * @typedef {{ overrides: Record<string, string>, extra: string[],
+ *   hues: Record<string, number>, colors: Record<string, string>,
+ *   origins: Record<string, { x: number, y: number }>,
+ *   lastMoved: Record<string, string> }} FolderRecord
+ */
+
+const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
+
+/** @type {(value: unknown) => value is string} */
+const isString = (value) => typeof value === 'string';
+
+/** @type {(value: unknown) => value is number} */
+const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value);
+
+/** @type {(value: unknown) => value is string} */
+const isHexColor = (value) => typeof value === 'string' && HEX_COLOR_RE.test(value);
+
+/** @type {(value: unknown) => value is { x: number, y: number }} */
+const isPoint = (value) => value !== null && typeof value === 'object'
+  && isFiniteNumber(/** @type {any} */ (value).x) && isFiniteNumber(/** @type {any} */ (value).y);
+
+/**
+ * Copia so as entradas cujo valor passa no teste.
+ * @template T
+ * @param {unknown} raw
+ * @param {(value: unknown) => value is T} accept
+ * @returns {Record<string, T>}
+ */
+function pickRecord(raw, accept) {
+  /** @type {Record<string, T>} */
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [key, value] of Object.entries(raw)) {
+    if (accept(value)) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Organizacao em pastas deste board. Entrada estragada e descartada uma a uma:
+ * uma cor invalida nao apaga as pastas que estavam boas.
+ * @returns {FolderRecord}
+ */
+export function loadFolders() {
+  /** @type {FolderRecord} */
+  const empty = { overrides: {}, extra: [], hues: {}, colors: {}, origins: {}, lastMoved: {} };
+  try {
+    const raw = localStorage.getItem(foldersKey());
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return empty;
+    return {
+      overrides: pickRecord(parsed.overrides, isString),
+      extra: Array.isArray(parsed.extra)
+        ? parsed.extra.filter((/** @type {unknown} */ v) => isString(v) && v !== '')
+        : [],
+      hues: pickRecord(parsed.hues, isFiniteNumber),
+      colors: pickRecord(parsed.colors, isHexColor),
+      // Ponto copiado so com x e y: nada alem disso chega ao layout.
+      origins: Object.fromEntries(Object.entries(pickRecord(parsed.origins, isPoint))
+        .map(([folder, point]) => [folder, { x: point.x, y: point.y }])),
+      lastMoved: pickRecord(parsed.lastMoved, isString),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * Grava a organizacao em pastas inteira.
+ * @param {FolderRecord} record
+ */
+export function saveFolders(record) {
+  try {
+    localStorage.setItem(foldersKey(), JSON.stringify(record));
+  } catch {
+    // Sem espaco ou sem permissao: o board segue funcionando, so nao lembra.
+  }
+}

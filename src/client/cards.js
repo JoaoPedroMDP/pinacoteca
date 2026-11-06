@@ -20,8 +20,9 @@ import {
 // dos dois chama o outro durante a avaliacao do modulo, so dentro de listener.
 import { bindFrameKeys } from './controls.js';
 import { savedPosition } from './storage.js';
+import { paintScreen } from './folders.js';
 import {
-  CARD_WIDTH, DEFAULT_FRAME_HEIGHT, LATE_ASSET_SCAN_MS,
+  CARD_WIDTH, DEFAULT_FRAME_HEIGHT, DRAG_SCREEN_TYPE, LATE_ASSET_SCAN_MS,
   MAX_FRAME_HEIGHT, MIN_FRAME_HEIGHT, MIN_FRAME_WIDTH,
   PRESET_FRAME_SIZES, RESIZE_CURSORS, RESIZE_EDGE_PX,
 } from './constants.js';
@@ -170,6 +171,10 @@ function buildTitle(file) {
   const title = document.createElement('header');
   title.className = 'card-title';
 
+  // A cor da pasta da tela (veja `paintScreen`). Escondida para tela na raiz.
+  const dot = document.createElement('span');
+  dot.className = 'card-folder-dot';
+
   const label = document.createElement('span');
   label.className = 'card-title-label';
   label.textContent = file;
@@ -212,7 +217,7 @@ function buildTitle(file) {
     menu.append(option);
   }
 
-  title.append(label, button, menu);
+  title.append(dot, label, button, menu);
   return title;
 }
 
@@ -237,6 +242,30 @@ function initialSize(saved) {
   }
 
   return { width: CARD_WIDTH, height: DEFAULT_FRAME_HEIGHT, sized: false };
+}
+
+/**
+ * A folha da tela na sidebar. Clicar centraliza o board nela; arrasta-la para
+ * outra pasta muda a pasta da tela no board (so no navegador — veja
+ * `folders.js`).
+ * @param {string} file
+ * @returns {HTMLButtonElement}
+ */
+function buildSidebarItem(file) {
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'screen-item';
+  item.title = file;
+  // Na arvore o caminho da pasta ja vem do cabecalho; a folha mostra so o nome.
+  item.textContent = file.slice(file.lastIndexOf('/') + 1);
+  item.addEventListener('click', () => centerOn(file));
+  item.draggable = true;
+  item.addEventListener('dragstart', (event) => {
+    if (!event.dataTransfer) return;
+    event.dataTransfer.setData(DRAG_SCREEN_TYPE, file);
+    event.dataTransfer.effectAllowed = 'move';
+  });
+  return item;
 }
 
 /**
@@ -288,13 +317,7 @@ export function createCard(file) {
   // comentarios de outra tela precisa sair da frente dela do mesmo jeito.
   card.addEventListener('pointerenter', () => onCardHover(file));
 
-  const item = document.createElement('button');
-  item.type = 'button';
-  item.className = 'screen-item';
-  item.title = file;
-  // Na arvore o caminho da pasta ja vem do cabecalho; a folha mostra so o nome.
-  item.textContent = file.slice(file.lastIndexOf('/') + 1);
-  item.addEventListener('click', () => centerOn(file));
+  const item = buildSidebarItem(file);
 
   // A tela volta para onde — e do tamanho que — o usuario a deixou da ultima vez.
   const saved = savedPosition(file);
@@ -322,6 +345,7 @@ export function createCard(file) {
   // em vez de piscar no tamanho padrao ate a primeira medida.
   card.style.width = `${screen.frameWidth}px`;
   frame.style.height = `${screen.frameHeight}px`;
+  paintScreen(screen);
 
   iframe.addEventListener('load', () => {
     // Recoletado a cada carga: o map de assets nunca fica velho.

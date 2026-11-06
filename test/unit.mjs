@@ -28,13 +28,14 @@ import {
 import { commentQueue, source } from '../src/client/state.js';
 import {
   loadChatHistory, loadChatPrefs, loadOpenConversation, pushChatHistory, loadChatDraft,
-  saveChatDraft, saveOpenConversation,
+  saveChatDraft, saveOpenConversation, loadFolders, saveFolders,
 } from '../src/client/storage.js';
 import {
   assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
   clampSidebarWidth, normalizeQuestions, previewUrl, rectsOverlap, resizeZoneAt,
   resolveXPath, separateOverlaps, serializeCommentQueue, snapToGrid, sortNames,
-  toolTarget,
+  toolTarget, basenameOf, dirnameOf, folderColor, hexToHsl, hslToHex, relocatePath,
+  shelfWidth, subfolderShade, rectGap, connectedFrom,
 } from '../src/client/utils.js';
 import { parseInline, parseMarkdown } from '../src/client/markdown.js';
 
@@ -784,6 +785,44 @@ function useStorage(storage) {
   return storage;
 }
 
+/** @type {import('../src/client/storage.js').FolderRecord} */
+const EMPTY_FOLDERS = { overrides: {}, extra: [], hues: {}, colors: {}, origins: {}, lastMoved: {} };
+
+test('loadFolders descarta so a entrada estragada e e por raiz', () => {
+  const storage = useStorage(memoryStorage());
+  storage.setItem('pinacoteca:folders:/tmp/proto', JSON.stringify({
+    overrides: { 'a.html': 'auth', 'b.html': 7 },
+    extra: ['vazia', '', 3],
+    hues: { auth: 40, ruim: 'x' },
+    colors: { auth: '#a1b2c3', ruim: 'red' },
+    origins: { auth: { x: 10, y: -4, extra: 1 }, ruim: { x: 'a', y: 0 }, nulo: null },
+    lastMoved: { auth: 'a.html', ruim: 3 },
+  }));
+  assert.deepEqual(loadFolders(), {
+    overrides: { 'a.html': 'auth' },
+    extra: ['vazia'],
+    hues: { auth: 40 },
+    colors: { auth: '#a1b2c3' },
+    origins: { auth: { x: 10, y: -4 } },
+    lastMoved: { auth: 'a.html' },
+  });
+
+  saveFolders({ ...EMPTY_FOLDERS, extra: ['outra'] });
+  source.root = '/tmp/outra-pasta';
+  assert.deepEqual(loadFolders().extra, []);
+  source.root = '/tmp/proto';
+  assert.deepEqual(loadFolders().extra, ['outra']);
+});
+
+test('loadFolders tolera localStorage bloqueado e JSON estragado', () => {
+  useStorage(brokenStorage());
+  assert.deepEqual(loadFolders(), EMPTY_FOLDERS);
+  assert.doesNotThrow(() => saveFolders(EMPTY_FOLDERS));
+  const storage = useStorage(memoryStorage());
+  storage.setItem('pinacoteca:folders:/tmp/proto', '{nao e json');
+  assert.deepEqual(loadFolders(), EMPTY_FOLDERS);
+});
+
 test('loadChatPrefs devolve o padrao quando nao ha nada gravado', () => {
   useStorage(memoryStorage());
   const prefs = loadChatPrefs();
@@ -1404,4 +1443,85 @@ test('parseMarkdown le tabela com alinhamento', () => {
 
 test('parseMarkdown nao confunde barra solta com tabela', () => {
   assert.deepEqual(parseMarkdown('a | b'), [{ type: 'paragraph', inlines: [t('a | b')] }]);
+});
+
+/* ---------- pastas (utils.js) ---------- */
+
+test('dirnameOf e basenameOf separam pasta e nome', () => {
+  assert.equal(dirnameOf('a/b/c.html'), 'a/b');
+  assert.equal(dirnameOf('c.html'), '');
+  assert.equal(basenameOf('a/b/c.html'), 'c.html');
+  assert.equal(basenameOf('a'), 'a');
+});
+
+test('buildTree usa a pasta efetiva e cria pastas vazias pedidas', () => {
+  const root = buildTree(
+    ['auth/login.html', 'solo.html'],
+    (file) => (file === 'solo.html' ? 'extra/sub' : 'auth'),
+    ['vazia'],
+  );
+  assert.deepEqual([...root.dirs.keys()].sort(), ['auth', 'extra', 'vazia']);
+  assert.deepEqual(root.dirs.get('extra')?.dirs.get('sub')?.files, ['solo.html']);
+  assert.equal(root.dirs.get('extra')?.dirs.get('sub')?.path, 'extra/sub');
+  assert.deepEqual(root.dirs.get('vazia')?.files, []);
+  assert.deepEqual(root.files, []);
+});
+
+test('relocatePath leva a pasta e o que esta abaixo dela, e so isso', () => {
+  assert.equal(relocatePath('a', 'a', 'x/a'), 'x/a');
+  assert.equal(relocatePath('a/b', 'a', 'x/a'), 'x/a/b');
+  assert.equal(relocatePath('ab', 'a', 'x'), 'ab');
+  assert.equal(relocatePath('outra', 'a', 'x'), 'outra');
+});
+
+test('hslToHex e hexToHsl vao e voltam', () => {
+  assert.equal(hslToHex(0, 100, 50), '#ff0000');
+  assert.equal(hslToHex(120, 100, 25), '#008000');
+  assert.deepEqual(hexToHsl('#ff0000'), { h: 0, s: 100, l: 50 });
+  // HSL em inteiros arredonda: a volta chega a 1 unidade da ida.
+  const back = hexToHsl(hslToHex(205, 52, 49));
+  assert.ok(Math.abs(back.h - 205) <= 1 && Math.abs(back.s - 52) <= 1 && Math.abs(back.l - 49) <= 1,
+    JSON.stringify(back));
+});
+
+test('subfolderShade fica na familia do pai, muda de tom e e estavel', () => {
+  const parent = hslToHex(200, 62, 56);
+  const shade = subfolderShade(parent, 'admin');
+  assert.notEqual(shade, parent);
+  assert.equal(subfolderShade(parent, 'admin'), shade);
+  const hue = hexToHsl(shade).h;
+  assert.ok(Math.abs(hue - 200) <= 10, `matiz ${hue}`);
+  assert.notEqual(hexToHsl(shade).l, hexToHsl(parent).l);
+});
+
+test('folderColor: escolhida vence, topo usa o matiz, subpasta deriva do pai', () => {
+  const hues = { auth: 30 };
+  assert.equal(folderColor('auth', hues, {}), hslToHex(30, 62, 56));
+  assert.equal(folderColor('auth', hues, { auth: '#112233' }), '#112233');
+  assert.equal(folderColor('auth/admin', hues, { auth: '#112233' }), subfolderShade('#112233', 'admin'));
+  assert.equal(folderColor('auth/admin', hues, { 'auth/admin': '#abcdef' }), '#abcdef');
+});
+
+test('rectGap mede o maior vao, e zero quando as caixas se tocam', () => {
+  const a = { x: 0, y: 0, width: 10, height: 10 };
+  assert.equal(rectGap(a, { x: 15, y: 0, width: 10, height: 10 }), 5);
+  assert.equal(rectGap(a, { x: 10, y: 0, width: 10, height: 10 }), 0);
+  assert.equal(rectGap(a, { x: 13, y: 18, width: 5, height: 5 }), 8);
+  assert.equal(rectGap(a, { x: 2, y: 2, width: 3, height: 3 }), 0);
+});
+
+test('connectedFrom segue a cadeia de vizinhas e para no primeiro vao grande', () => {
+  const box = (/** @type {number} */ x) => ({ x, y: 0, width: 10, height: 10 });
+  // 0 encosta em 1, 1 em 2; 3 esta longe de todas.
+  const rects = [box(0), box(15), box(30), box(200)];
+  assert.deepEqual([...connectedFrom(rects, [0], 6)].sort(), [0, 1, 2]);
+  assert.deepEqual([...connectedFrom(rects, [3], 6)], [3]);
+  assert.deepEqual([...connectedFrom(rects, [2], 4)], [2]);
+});
+
+test('shelfWidth nunca fica menor que o bloco mais largo', () => {
+  assert.equal(shelfWidth([{ width: 5000, height: 10 }], 0), 5000);
+  const many = Array.from({ length: 9 }, () => ({ width: 100, height: 100 }));
+  const width = shelfWidth(many, 0);
+  assert.ok(width > 300 && width < 900, `largura ${width}`);
 });

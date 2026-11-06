@@ -6,15 +6,21 @@
 // comportamento de canvas que se espera.
 
 import { canvas, viewport, zoomLabel } from './dom.js';
-import { screens, ui, view } from './state.js';
+import { folders, screens, ui, view } from './state.js';
 import { setCurrent } from './sidebar.js';
 import {
-  assignColumns, clamp, findOverlaps, rectsOverlap, separateOverlaps, snapToGrid,
+  assignColumns, clamp, connectedFrom, findOverlaps, rectsOverlap, separateOverlaps, shelfWidth,
+  snapToGrid,
 } from './utils.js';
 import { clearPositions, loadPositions, savePositions } from './storage.js';
 import { scheduleCommentLinks } from './inspect.js';
 import {
-  CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, GAP, GRID_SIZE,
+  clearGroupOrigins, colorOf, folderOf, groupByFolder, markLastMoved, paintElement,
+  setFolderColor, setGroupOrigin,
+} from './folders.js';
+import {
+  CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, FOLDER_REACH, FOLDER_ZONE_LABEL,
+  FOLDER_ZONE_PAD, GAP, GRID_SIZE,
   MAX_FRAME_HEIGHT, MAX_FRAME_WIDTH, MAX_SCALE,
   MIN_FRAME_HEIGHT, MIN_FRAME_WIDTH, MIN_SCALE,
 } from './constants.js';
@@ -230,7 +236,322 @@ export function refreshOverlaps() {
   for (const screen of screens.values()) {
     screen.card.classList.toggle('is-invalid', invalid.has(screen.file));
   }
+  refreshFolderZones();
   return invalid;
+}
+
+/* ---------- Grupo visual de cada pasta ---------- */
+
+/** @typedef {import('./state.js').Screen} Screen */
+
+/**
+ * As telas que o fundo da pasta envolve: um conjunto ligado.
+ *
+ * A semente sao as telas do grupo que o layout posiciona (as que o tamanho
+ * global fixou contam como dele). Quando nao sobrou nenhuma — o usuario moveu
+ * todas —, a semente e a ultima tela movida da pasta; sem registro dela, a
+ * primeira. Dali, toda tela da mesma pasta que encosta numa do conjunto
+ * (`FOLDER_REACH`) entra, em cadeia. Assim o fundo nunca some enquanto a pasta
+ * tiver tela, acompanha a ultima movida, e acolhe a tela largada ao lado dele.
+ *
+ * @param {string} folder
+ * @param {Screen[]} [members] as telas da pasta, se quem chama ja as tem
+ * @returns {Screen[]}
+ */
+export function folderGroup(folder, members) {
+  const all = members ?? [...screens.values()].filter((screen) => folderOf(screen.file) === folder);
+  if (all.length === 0) return [];
+
+  /** @type {number[]} */
+  let seeds = [];
+  all.forEach((screen, index) => {
+    if (!screen.pinned || screen.autoPinned) seeds.push(index);
+  });
+  if (seeds.length === 0) {
+    const last = all.findIndex((screen) => screen.file === folders.lastMoved[folder]);
+    seeds = [Math.max(0, last)];
+  }
+  const found = connectedFrom(all.map(screenRect), seeds, FOLDER_REACH);
+  return all.filter((_, index) => found.has(index));
+}
+
+/**
+ * Caixa do fundo em volta de um grupo: a folga dos lados e a faixa do nome em
+ * cima.
+ * @param {Screen[]} group nao vazio
+ * @returns {import('./utils.js').Rect}
+ */
+function zoneRect(group) {
+  const rects = group.map(screenRect);
+  const left = Math.min(...rects.map((r) => r.x)) - FOLDER_ZONE_PAD;
+  const top = Math.min(...rects.map((r) => r.y)) - FOLDER_ZONE_PAD - FOLDER_ZONE_LABEL;
+  const right = Math.max(...rects.map((r) => r.x + r.width)) + FOLDER_ZONE_PAD;
+  const bottom = Math.max(...rects.map((r) => r.y + r.height)) + FOLDER_ZONE_PAD;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/**
+ * Abre ou fecha o menu do nome de uma pasta no board. Um por vez.
+ * @param {string | null} folder null fecha o que estiver aberto
+ */
+export function setFolderMenu(folder) {
+  ui.openFolderMenu = folder;
+  for (const zone of canvas.querySelectorAll('.folder-zone')) {
+    if (!(zone instanceof HTMLElement)) continue;
+    const open = zone.dataset.folderPath === folder;
+    zone.classList.toggle('has-open-menu', open);
+    zone.querySelector('.folder-zone-menu-btn')?.setAttribute('aria-expanded', String(open));
+    // O seletor abre na cor atual, mesmo que ela tenha mudado pela sidebar.
+    const input = /** @type {HTMLInputElement | null} */ (zone.querySelector('.folder-zone-color'));
+    if (open && input && folder) input.value = colorOf(folder) ?? '#000000';
+  }
+}
+
+/**
+ * O menu do nome da pasta: reagrupar e mudar a cor.
+ * @param {string} folder
+ * @returns {HTMLElement}
+ */
+function buildFolderMenu(folder) {
+  const menu = document.createElement('div');
+  menu.className = 'folder-zone-menu';
+
+  const regroup = document.createElement('button');
+  regroup.type = 'button';
+  regroup.className = 'folder-zone-option';
+  regroup.dataset.action = 'regroup';
+  regroup.textContent = 'Reagrupar telas';
+  regroup.addEventListener('click', () => {
+    setFolderMenu(null);
+    regroupFolder(folder);
+  });
+
+  // `<label>` em volta do seletor: clicar na opcao inteira abre a paleta.
+  const color = document.createElement('label');
+  color.className = 'folder-zone-option';
+  color.textContent = 'Mudar cor';
+  const input = document.createElement('input');
+  input.type = 'color';
+  input.className = 'folder-zone-color';
+  input.addEventListener('input', () => setFolderColor(folder, input.value, false));
+  input.addEventListener('change', () => setFolderColor(folder, input.value, true));
+  color.append(input);
+
+  menu.append(regroup, color);
+  return menu;
+}
+
+/**
+ * Monta o fundo de uma pasta: o retangulo, o nome (que e a alca de arrasto do
+ * grupo, veja `controls.js`) e o menu dele.
+ * @param {string} folder
+ * @returns {HTMLElement}
+ */
+function buildZone(folder) {
+  const zone = document.createElement('div');
+  zone.className = 'folder-zone';
+
+  const label = document.createElement('div');
+  label.className = 'folder-zone-label';
+  label.title = 'Arraste para mover o grupo';
+  const name = document.createElement('span');
+  name.className = 'folder-zone-name';
+  name.textContent = folder;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'folder-zone-menu-btn';
+  button.title = 'Opcoes da pasta';
+  button.setAttribute('aria-expanded', 'false');
+  button.textContent = '▾';
+  button.addEventListener('click', () => setFolderMenu(ui.openFolderMenu === folder ? null : folder));
+
+  label.append(name, button, buildFolderMenu(folder));
+  zone.append(label);
+  return zone;
+}
+
+/**
+ * Redesenha o fundo colorido de cada pasta atras do grupo dela (`folderGroup`).
+ *
+ * Os fundos sao reaproveitados por pasta, e nao remontados: isto roda a cada
+ * passo de um arrasto, e remontar fecharia o menu e o seletor de cor abertos.
+ * Telas na raiz nao tem fundo.
+ *
+ * Roda junto com `refreshOverlaps`, que ja e chamado depois de todo movimento.
+ */
+function refreshFolderZones() {
+  /** @type {Map<string, HTMLElement>} */
+  const existing = new Map();
+  for (const zone of canvas.querySelectorAll('.folder-zone')) {
+    if (zone instanceof HTMLElement) existing.set(zone.dataset.folderPath ?? '', zone);
+  }
+
+  /** @type {HTMLElement[]} */
+  const fresh = [];
+  for (const [folder, members] of groupByFolder([...screens.values()])) {
+    if (!folder) continue;
+    const zone = existing.get(folder) ?? buildZone(folder);
+    existing.delete(folder);
+
+    const box = zoneRect(folderGroup(folder, members));
+    zone.style.left = `${box.x}px`;
+    zone.style.top = `${box.y}px`;
+    zone.style.width = `${box.width}px`;
+    zone.style.height = `${box.height}px`;
+    paintElement(zone, folder);
+    zone.classList.toggle('has-open-menu', ui.openFolderMenu === folder);
+    if (!zone.isConnected) fresh.push(zone);
+  }
+
+  for (const zone of existing.values()) zone.remove();
+  if (ui.openFolderMenu && !screensInFolder(ui.openFolderMenu)) ui.openFolderMenu = null;
+  // No comeco do canvas: o fundo fica atras dos cards sem disputar z-index.
+  canvas.prepend(...fresh);
+}
+
+/**
+ * A pasta ainda tem tela? (O menu de uma pasta que esvaziou nao fica aberto.)
+ * @param {string} folder
+ * @returns {boolean}
+ */
+function screensInFolder(folder) {
+  for (const screen of screens.values()) if (folderOf(screen.file) === folder) return true;
+  return false;
+}
+
+/**
+ * @typedef {{ folder: string, origin: { x: number, y: number } | null,
+ *   items: Array<{ screen: Screen, x: number, y: number }>, dx: number, dy: number }} GroupDrag
+ *   Um arrasto de grupo em andamento: de onde cada tela partiu e quanto ja andou.
+ */
+
+/**
+ * Comeca a arrastar o grupo de uma pasta pelo nome dela.
+ *
+ * Vai junto tudo que o fundo envolve agora: as telas do layout e as movidas a
+ * mao que estao encostadas nelas. A origem do bloco e a guardada, ou — se o
+ * bloco ainda estava na prateleira — o canto do fundo em volta das telas do
+ * layout, que e onde `arrangeGroup` as pos.
+ *
+ * @param {string} folder
+ * @returns {GroupDrag | null}
+ */
+export function beginGroupDrag(folder) {
+  const group = folderGroup(folder);
+  if (group.length === 0) return null;
+  const flowing = group.filter((screen) => !screen.pinned);
+  const saved = folders.origins[folder];
+  const origin = saved ? { ...saved } : flowing.length > 0 ? zoneRect(flowing) : null;
+  return {
+    folder,
+    origin: origin ? { x: origin.x, y: origin.y } : null,
+    items: group.map((screen) => ({ screen, x: screen.x, y: screen.y })),
+    dx: 0,
+    dy: 0,
+  };
+}
+
+/**
+ * Um passo do arrasto do grupo. Nao roda o layout: os outros blocos tremeriam
+ * embaixo do cursor. As telas so andam juntas, e o layout acontece no fim.
+ * @param {GroupDrag} drag
+ * @param {number} dx deslocamento desde o comeco, em px de canvas
+ * @param {number} dy
+ */
+export function dragGroup(drag, dx, dy) {
+  if (ui.snapToGrid) {
+    const ref = drag.origin ?? drag.items[0];
+    dx = snapToGrid(ref.x + dx, GRID_SIZE) - ref.x;
+    dy = snapToGrid(ref.y + dy, GRID_SIZE) - ref.y;
+  }
+  drag.dx = Math.round(dx);
+  drag.dy = Math.round(dy);
+  for (const item of drag.items) place(item.screen, item.x + drag.dx, item.y + drag.dy);
+  refreshOverlaps();
+}
+
+/**
+ * Fim do arrasto do grupo: a origem nova vira a do bloco, o layout reacomoda
+ * o resto do board em volta e a organizacao e gravada.
+ * @param {GroupDrag} drag
+ */
+export function endGroupDrag(drag) {
+  if (drag.dx === 0 && drag.dy === 0) return;
+  if (drag.origin) {
+    setGroupOrigin(drag.folder, { x: drag.origin.x + drag.dx, y: drag.origin.y + drag.dy });
+  }
+  layout();
+  persistPositions();
+}
+
+/**
+ * Traz todas as telas da pasta de volta ao grupo, arrumadas pelo layout: nenhuma
+ * fica fixa onde o usuario a deixou, e a posicao salva delas e esquecida.
+ *
+ * Se o bloco ainda nao tinha origem, ele ganha uma no canto do fundo atual — o
+ * grupo se reorganiza onde esta, em vez de saltar para a prateleira.
+ *
+ * @param {string} folder
+ */
+export function regroupFolder(folder) {
+  const members = [...screens.values()].filter((screen) => folderOf(screen.file) === folder);
+  if (members.length === 0) return;
+
+  if (!folders.origins[folder]) {
+    const box = zoneRect(folderGroup(folder, members));
+    setGroupOrigin(folder, { x: box.x, y: box.y });
+  }
+
+  const positions = loadPositions();
+  for (const screen of members) {
+    screen.pinned = false;
+    screen.autoPinned = false;
+    delete positions[screen.file];
+  }
+  savePositions(positions);
+  layout();
+  persistPositions();
+}
+
+/**
+ * Arruma as telas de uma pasta em colunas (`⌈√n⌉`), relativas ao canto do
+ * bloco. Pasta de verdade reserva a folga e a faixa do nome do fundo; a raiz,
+ * sem fundo, nao reserva nada — um board sem pastas sai igual ao de sempre.
+ *
+ * @param {string} folder
+ * @param {import('./state.js').Screen[]} members
+ * @returns {{ width: number, height: number,
+ *   items: Array<{ screen: import('./state.js').Screen, x: number, y: number }> }}
+ */
+function arrangeGroup(folder, members) {
+  const pad = folder ? FOLDER_ZONE_PAD : 0;
+  const top = folder ? FOLDER_ZONE_PAD + FOLDER_ZONE_LABEL : 0;
+  const columns = assignColumns(
+    members.map((screen) => CARD_TITLE_HEIGHT + screen.frameHeight + GAP),
+    Math.ceil(Math.sqrt(members.length)),
+  );
+
+  /** @type {Array<{ screen: import('./state.js').Screen, x: number, y: number }>} */
+  const items = [];
+  let x = pad;
+  let bottom = top;
+  for (const column of columns) {
+    if (column.length === 0) continue;
+    let columnWidth = MIN_FRAME_WIDTH;
+    for (const index of column) columnWidth = Math.max(columnWidth, members[index].frameWidth);
+
+    let y = top;
+    for (const index of column) {
+      const screen = members[index];
+      items.push({ screen, x, y });
+      y += CARD_TITLE_HEIGHT + screen.frameHeight;
+      bottom = Math.max(bottom, y);
+      y += GAP;
+    }
+    x += columnWidth + GAP;
+  }
+  return { width: x - GAP + pad, height: bottom + pad, items };
 }
 
 /**
@@ -277,6 +598,8 @@ export function moveScreen(file, x, y) {
   // O usuario mirou este ponto: a tela deixa de ser do gesto global e nao volta
   // a escorrer no proximo.
   screen.autoPinned = false;
+  // E e ela que segura o fundo da pasta quando nenhuma outra e do layout.
+  markLastMoved(file);
   if (ui.snapToGrid) {
     x = snapToGrid(x, GRID_SIZE);
     y = snapToGrid(y, GRID_SIZE);
@@ -432,6 +755,7 @@ export function persistPositions() {
 /** Esquece a organizacao do usuario e devolve tudo ao layout automatico. */
 export function resetPositions() {
   clearPositions();
+  clearGroupOrigins();
   clearHistory();
   for (const screen of screens.values()) {
     screen.pinned = false;
@@ -457,27 +781,75 @@ export function layout() {
 
   // Tela fixa tambem passa pelo DOM: e a carga inicial que a coloca no lugar.
   for (const screen of pinned) place(screen, screen.x, screen.y);
-  const blockers = pinned.map(screenRect).sort((a, b) => a.y - b.y);
+  const blockers = pinned.map(screenRect);
 
-  const columns = assignColumns(
-    flowing.map((screen) => CARD_TITLE_HEIGHT + screen.frameHeight + GAP),
-    Math.ceil(Math.sqrt(flowing.length)),
-  );
+  const arranged = groupByFolder(flowing).map(([folder, members]) => ({
+    folder, ...arrangeGroup(folder, members),
+  }));
 
-  let x = 0;
-  for (const column of columns) {
-    let columnWidth = MIN_FRAME_WIDTH;
-    for (const index of column) columnWidth = Math.max(columnWidth, flowing[index].frameWidth);
-
-    let y = 0;
-    for (const index of column) {
-      const screen = flowing[index];
-      y = belowPinned({ ...screenRect(screen), x, y }, blockers);
-      place(screen, x, y);
-      y += CARD_TITLE_HEIGHT + screen.frameHeight + GAP;
+  // Bloco que o usuario pos num lugar (arrastando pelo nome da pasta) fica la,
+  // e vira obstaculo para os da prateleira, como uma tela fixa.
+  const blocks = [];
+  for (const block of arranged) {
+    const origin = block.folder ? folders.origins[block.folder] : undefined;
+    if (!origin) {
+      blocks.push(block);
+      continue;
     }
-    x += columnWidth + GAP;
+    for (const item of block.items) place(item.screen, origin.x + item.x, origin.y + item.y);
+    blockers.push({ x: origin.x, y: origin.y, width: block.width, height: block.height });
+  }
+  blockers.sort((a, b) => a.y - b.y);
+  const limit = shelfWidth(blocks, GAP);
+
+  // Prateleiras: um bloco por pasta, da esquerda para a direita, quebrando a
+  // linha no limite. A linha seguinte comeca abaixo do que a anterior de fato
+  // ocupou — um bloco pode ter descido para desviar de uma tela fixa.
+  let x = 0;
+  let rowTop = 0;
+  let rowBottom = 0;
+  for (const block of blocks) {
+    if (x > 0 && x + block.width > limit) {
+      x = 0;
+      rowTop = rowBottom + GAP;
+    }
+    rowBottom = Math.max(rowBottom, placeBlock(block, x, rowTop, blockers));
+    x += block.width + GAP;
   }
 
   refreshOverlaps();
+}
+
+/**
+ * Poe um bloco de pasta no canvas, desviando das telas fixas.
+ *
+ * Pasta de verdade desce **inteira**, para o fundo continuar envolvendo um
+ * grupo so. A raiz desce tela a tela, como o layout sempre fez: e o caso de um
+ * board sem pastas, e ele continua igual.
+ *
+ * @param {ReturnType<typeof arrangeGroup> & { folder: string }} block
+ * @param {number} x
+ * @param {number} y
+ * @param {import('./utils.js').Rect[]} blockers
+ * @returns {number} o `y` mais baixo que o bloco ocupou
+ */
+function placeBlock(block, x, y, blockers) {
+  let bottom = y;
+  if (block.folder) {
+    const top = belowPinned({ x, y, width: block.width, height: block.height }, blockers);
+    for (const item of block.items) place(item.screen, x + item.x, top + item.y);
+    return top + block.height;
+  }
+
+  /** @type {Map<number, number>} quanto cada coluna ja desceu para desviar */
+  const pushed = new Map();
+  for (const item of block.items) {
+    const offset = pushed.get(item.x) ?? 0;
+    const target = y + item.y + offset;
+    const free = belowPinned({ ...screenRect(item.screen), x: x + item.x, y: target }, blockers);
+    pushed.set(item.x, offset + free - target);
+    place(item.screen, x + item.x, free);
+    bottom = Math.max(bottom, free + CARD_TITLE_HEIGHT + item.screen.frameHeight);
+  }
+  return bottom;
 }
