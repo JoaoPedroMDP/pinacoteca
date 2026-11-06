@@ -12,6 +12,7 @@ import {
   assignColumns, clamp, findOverlaps, rectsOverlap, separateOverlaps, snapToGrid,
 } from './utils.js';
 import { clearPositions, loadPositions, savePositions } from './storage.js';
+import { scheduleCommentLinks } from './inspect.js';
 import {
   CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, GAP, GRID_SIZE,
   MAX_FRAME_HEIGHT, MAX_FRAME_WIDTH, MAX_SCALE,
@@ -26,6 +27,9 @@ export function applyTransform() {
   // O mesmo zoom, na mao do CSS: e com ele que o titulo limita a largura dele a
   // do card *na tela*, em vez de crescer junto com a contra-escala (veja board.css).
   canvas.style.setProperty('--scale', String(view.scale));
+  // A coluna de comentarios e contra-escalada, entao o zoom move a ponta das
+  // linhas que sai dela.
+  scheduleCommentLinks();
   zoomLabel.textContent = `${Math.round(view.scale * 100)}%`;
 }
 

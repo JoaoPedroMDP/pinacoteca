@@ -13,7 +13,8 @@ import {
 } from './view.js';
 import { setCurrent } from './sidebar.js';
 import {
-  clearHoverHighlight, copyXPathAt, injectInspectStyle, onInspectMove, tryReanchor,
+  clearHoverHighlight, copyXPathAt, injectInspectStyle, onCardHover, onInspectMove,
+  scheduleCommentLinks, tryReanchor,
 } from './inspect.js';
 // Ciclo com `controls.js` (ele importa `setInteractive` daqui). E seguro: nenhum
 // dos dois chama o outro durante a avaliacao do modulo, so dentro de listener.
@@ -283,6 +284,9 @@ export function createCard(file) {
 
   frame.append(iframe, shield);
   card.append(title, frame);
+  // No `card`, nao no escudo: o escudo some na tela interativa, e a coluna de
+  // comentarios de outra tela precisa sair da frente dela do mesmo jeito.
+  card.addEventListener('pointerenter', () => onCardHover(file));
 
   const item = document.createElement('button');
   item.type = 'button';
@@ -329,6 +333,10 @@ export function createCard(file) {
     bindFrameKeys(iframe.contentWindow);
     // Reancora (ou marca sem referencia) cada item da fila de comentarios deste arquivo.
     tryReanchor(file, iframe.contentDocument);
+    // As linhas dos comentarios medem o no ao vivo: rolar o prototipo, ou mudar
+    // o tamanho do frame, move o no sem passar pela fila.
+    iframe.contentWindow?.addEventListener('scroll', () => scheduleCommentLinks(file), { passive: true });
+    iframe.contentWindow?.addEventListener('resize', () => scheduleCommentLinks(file));
 
     // Segunda passada: o `load` do iframe nao e o fim da historia. Fonte web,
     // imagem tardia e conteudo montado por JS chegam depois dele, e a medida

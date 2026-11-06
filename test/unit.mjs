@@ -1151,7 +1151,7 @@ test('commentQueue cria, atualiza e remove um item pela chave (file, xpath)', ()
 
   items = new Map();
   commentQueue.set('a.html', items);
-  items.set('//*[@id="x"]', { xpath: '//*[@id="x"]', text: 'primeiro', status: 'draft', anchorPoint: null });
+  items.set('//*[@id="x"]', { xpath: '//*[@id="x"]', text: 'primeiro', status: 'draft' });
   assert.equal(commentQueue.get('a.html')?.get('//*[@id="x"]')?.text, 'primeiro');
 
   // Reclicar o mesmo XPath atualiza o mesmo item, nao cria um segundo.
@@ -1163,7 +1163,7 @@ test('commentQueue cria, atualiza e remove um item pela chave (file, xpath)', ()
   // Outro arquivo com o mesmo XPath e um item independente.
   const others = new Map();
   commentQueue.set('b.html', others);
-  others.set('//*[@id="x"]', { xpath: '//*[@id="x"]', text: 'outro arquivo', status: 'draft', anchorPoint: null });
+  others.set('//*[@id="x"]', { xpath: '//*[@id="x"]', text: 'outro arquivo', status: 'draft' });
   assert.equal(commentQueue.get('b.html')?.get('//*[@id="x"]')?.text, 'outro arquivo');
   assert.equal(commentQueue.get('a.html')?.get('//*[@id="x"]')?.text, 'editado');
 
@@ -1201,7 +1201,7 @@ function queueOf(rows) {
   const queue = new Map();
   for (const [file, xpath, text, status] of rows) {
     if (!queue.has(file)) queue.set(file, new Map());
-    queue.get(file)?.set(xpath, { xpath, text, status, anchorPoint: null });
+    queue.get(file)?.set(xpath, { xpath, text, status });
   }
   return queue;
 }

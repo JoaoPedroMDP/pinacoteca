@@ -236,11 +236,10 @@ export const chat = {
  *   do arquivo, calculado por `computeXPath`/`resolveXPath` em `utils.js`.
  * @property {string} text o comentário, editado ao vivo na caixinha
  * @property {'draft' | 'confirmed' | 'sending' | 'unreferenced'} status
- * @property {{x: number, y: number} | null} anchorPoint última posição
- *   conhecida do nó, em coordenadas internas do iframe (`getBoundingClientRect`
- *   de dentro dele) — o balão/caixinha usa isso para se desenhar sem esperar o
- *   próximo hover, e continua correto sob pan/zoom porque a camada em que
- *   `anchorPoint` é desenhado já carrega o `transform` do canvas.
+ *
+ * Não há posição guardada no item: a linha que liga o balão ao nó mede o
+ * elemento vivo a cada desenho (veja `refreshLinks` em `inspect.js`), porque
+ * uma posição tirada no clique ficava para trás assim que o protótipo rolava.
  */
 
 /**
@@ -267,3 +266,11 @@ export function onQueueChange(listener) {
 export function notifyQueueChange() {
   for (const listener of queueListeners) listener();
 }
+
+/**
+ * De que lado do frame fica a coluna de comentários de cada tela. Ausente
+ * vale `'right'`. Muda quando o mouse entra numa tela que a coluna de outra
+ * está cobrindo (veja `onCardHover` em `inspect.js`).
+ * @type {Map<string, 'left' | 'right'>}
+ */
+export const commentRailSide = new Map();

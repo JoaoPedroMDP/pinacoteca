@@ -1345,13 +1345,12 @@ body {
 /* ---------- Fila de comentarios (modo ponteiro) ---------- */
 
 /* Filha do `.card` (nao do `.card-frame`, que corta com overflow: hidden):
-   herda o transform do canvas de graca, entao balao e caixinha ficam
-   ancorados sob pan/zoom sem recalculo, e podem crescer para fora da tela sem
-   serem cortados. `top: 36px` compensa o titulo acima do frame — 36px =
-   CARD_TITLE_HEIGHT em constants.js, mudou la muda aqui — para o layer ficar
-   alinhado ao topo do frame, que e o espaco em que `anchorPoint` e medido.
-   Vazia por padrao (pointer-events: none) para nao roubar hover/pan do board
-   fora dos elementos que ela de fato desenha. */
+   herda o transform do canvas de graca, entao coluna e linhas acompanham
+   pan/zoom sem recalculo, e a coluna pode ficar fora da tela sem ser cortada.
+   `top: 36px` compensa o titulo acima do frame — 36px = CARD_TITLE_HEIGHT em
+   constants.js, mudou la muda aqui — para o layer ficar alinhado ao topo do
+   frame, que e o espaco em que as linhas medem o no. Vazia por padrao
+   (pointer-events: none) para nao roubar hover/pan do board fora da coluna. */
 .pina-queue-layer {
   position: absolute;
   top: 36px;
@@ -1362,31 +1361,115 @@ body {
   z-index: 2;
 }
 
+/* Linhas da coluna ate o no. Cobre o frame, mas desenha fora dele tambem
+   (`overflow: visible`) — e la que esta a ponta da coluna. A espessura e
+   contra-escalada para continuar fina no zoom aproximado. */
+.pina-comment-links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.pina-comment-link {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: calc(1.5px * var(--inv-scale, 1));
+}
+
+.pina-comment-link-dot {
+  fill: var(--accent);
+  r: calc(3px * var(--inv-scale, 1));
+}
+
+/* Uma das pontas nao esta a vista (no rolado para fora do frame, item rolado
+   para fora da coluna): a linha continua, presa a borda, mas apagada. */
+.pina-comment-link.is-hidden-end {
+  stroke-dasharray: calc(4px * var(--inv-scale, 1)) calc(4px * var(--inv-scale, 1));
+  opacity: 0.45;
+}
+
+.pina-comment-link-dot.is-hidden-end {
+  opacity: 0.45;
+}
+
+/*
+ * Coluna de comentarios ao lado do frame. Contra-escalada inteira (e nao cada
+ * item), senao o empilhamento quebraria no zoom: o vao entre itens cresceria
+ * junto com o canvas. Por ser contra-escalada, o teto de altura tambem e: 100%
+ * do layer e a altura do frame no canvas, e `* --scale` a traz para o espaco
+ * da coluna — sem isso ela passaria da tela no zoom afastado.
+ * O `gap` lateral e contra-escalado pelo mesmo motivo: fica 16px na tela.
+ *
+ * A largura acompanha o item mais largo, ate metade de uma tela padrao — 640px
+ * = CARD_WIDTH / 2 em constants.js, mudou la muda aqui —, convertida para o
+ * espaco da coluna com `* --scale`. Sem esse teto, no zoom afastado um
+ * comentario longo cobriria a tela vizinha inteira.
+ *
+ * A coluna em si nao pega o ponteiro, so os itens dela: o vao entre os itens e
+ * a sobra ao lado deles deixam o mouse chegar a tela de baixo, e e o
+ * `pointerenter` dela que manda esta coluna para o outro lado (`onCardHover`).
+ * A roda sobre um item ainda rola a coluna; a barra de rolagem e que deixa de
+ * ser arrastavel.
+ */
+.pina-comment-rail {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 16px * var(--inv-scale, 1));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: max-content;
+  max-width: min(232px, calc(640px * var(--scale, 1)));
+  max-height: calc(100% * var(--scale, 1));
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  pointer-events: none;
+  transform: scale(var(--inv-scale, 1));
+  transform-origin: 0 0;
+}
+
+/* Do lado esquerdo, encostada no frame pela direita — o canto que fica preso
+   ao frame no zoom e o direito, e os itens se alinham a ele. */
+.pina-comment-rail.is-left {
+  right: calc(100% + 16px * var(--inv-scale, 1));
+  left: auto;
+  align-items: flex-end;
+  transform-origin: 100% 0;
+}
+
+.pina-comment-rail:empty {
+  display: none;
+}
+
 .pina-comment-balloon,
 .pina-comment-box {
-  position: absolute;
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   gap: 6px;
-  max-width: 220px;
+  max-width: 100%;
   padding: 6px 8px;
   border: 1px solid var(--accent);
   border-radius: 8px;
   background: rgb(20 22 26 / 96%);
   color: var(--text);
   font-size: 12px;
-  pointer-events: auto;
   cursor: pointer;
-  /*
-   * Filha do `.pina-queue-layer`, que herda o transform do canvas: sem isto o
-   * balao/caixinha encolheria (ou cresceria) junto do zoom, igual ia acontecer
-   * com `.card-title` sem a mesma correcao (veja o comentario la). Aqui nao ha
-   * `width: 100%` para desfazer — a largura ja e fixa em px —, entao so a
-   * contra-escala basta. Ancorada no canto superior esquerdo porque e esse
-   * canto que `anchorFor` mede.
-   */
-  transform: scale(var(--inv-scale, 1));
-  transform-origin: 0 0;
+  pointer-events: auto; /* a coluna nao pega o ponteiro; os itens dela, sim */
+}
+
+/* Colapsado, o balao e so um lembrete na coluna: menor que a caixinha, onde
+   se digita, para caberem mais antes de a coluna rolar. */
+.pina-comment-balloon {
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 10px;
 }
 
 .pina-comment-box {

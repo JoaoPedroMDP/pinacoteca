@@ -1005,7 +1005,7 @@ para um novo elemento reinicia o nível em 0.
 No modo ponteiro, clicar num nó sem nenhum modificador abre uma caixinha de comentário
 multi-linha ancorada nele — o `pointerdown` do pan chama `openCommentBoxAt` em vez de
 seguir para o `click` do escudo. Enter (sem Shift) confirma: a caixinha fecha e vira um
-balão sobre o nó; Shift+Enter só quebra linha. Reclicar um nó que já tem balão reabre a
+balão; Shift+Enter só quebra linha. Reclicar um nó que já tem balão reabre a
 caixinha pré-preenchida, editando o mesmo item — a chave é o XPath do nó dentro do
 arquivo, então não há como duplicar item no mesmo lugar. Clicar fora da caixinha aberta
 não a fecha nem descarta o rascunho: só o Enter (confirma) ou o badge "x" (remove)
@@ -1020,11 +1020,48 @@ fila, então o redesenho acontece a cada tecla; e tirar o `<textarea>` do DOM no
 tira junto o foco e **cancela a composição do teclado** — uma tecla morta de acento (`´`
 seguido de `a`) nunca fechava em `á`, e o cursor ainda voltava para o fim. Por isso a
 caixinha aberta é guardada por chave e reaproveitada (`mountedBoxes`): ela só é
-reposicionada, nunca reconstruída, e o layer remove apenas os nós que saíram da fila em
-vez de trocar todos de uma vez. A ordem dentro do layer não importa — balão e caixinha são
-posicionados em absoluto —, então o que entra depois pode ser anexado no fim. Uma caixinha
+mantida no lugar, nunca reconstruída nem movida: a coluna remove apenas os nós que saíram da
+fila e insere os balões recriados antes ou depois dela, na ordem da fila. Uma caixinha
 que saiu da tela fica desconectada do documento, e é esse o sinal de que o nó guardado não
-vale mais. O
+vale mais.
+
+**Balões e caixinhas não ficam sobre o nó, ficam numa coluna ao lado da tela**
+(`.pina-comment-rail`), empilhados na ordem da fila, e uma linha (`<svg>` no mesmo layer)
+liga cada um ao seu nó. A posição do nó não é guardada no item: um retrato tirado no clique
+ficava para trás assim que o protótipo rolava por dentro. Em vez disso `refreshLinks` mede
+o elemento vivo a cada desenho — `anchoredEls` guarda o `Element` de cada item, e
+`anchoredElement` o resolve de novo pelo XPath quando o guardado ficou para trás. O desenho
+é refeito a cada mudança da fila e, agendado num `requestAnimationFrame`
+(`scheduleCommentLinks`), no `scroll` e no `resize` da `contentWindow` (ligados no `load` de
+`cards.js`), no `scroll` da coluna e no zoom (`applyTransform`, porque a coluna é
+contra-escalada e a ponta dela anda). Quando uma das pontas não está à vista — nó rolado
+para fora do frame, item rolado para fora da coluna — ela é presa à borda e a linha fica
+tracejada e apagada.
+
+A coluna fica **por cima** da tela vizinha quando o `GAP` não a comporta. Para não esconder
+a vizinha de vez, `onCardHover` roda no `pointerenter` de cada `.card` (não do escudo, que
+some na tela interativa): toda coluna de outra tela que encosta na tela em hover troca de
+lado (`commentRailSide`, em `state.js`). A regra é "sair da frente de quem está em hover",
+não "ir para a esquerda", então não é preciso saber qual tela fica de que lado — os rects de
+tela (`getBoundingClientRect`) já trazem pan, zoom e a contra-escala da coluna. Trocar de lado
+é só uma classe (`.is-left`): a caixinha aberta não é remontada. Para isso funcionar, a
+coluna em si tem `pointer-events: none` e só os itens dela pegam o ponteiro: o vão entre
+eles e a sobra ao lado deixam o mouse chegar à tela de baixo. Só um mouse que entra
+justamente por cima de um balão não chega à tela, e nada troca até ele sair do balão. O
+preço é a barra de rolagem da coluna não ser arrastável; a roda sobre um item ainda rola.
+
+A coluna tem a largura do item mais largo, até metade de uma tela padrão (`CARD_WIDTH / 2`,
+repetido no CSS) convertida para o espaço dela com `* --scale` — sem esse teto, no zoom
+afastado um comentário longo cobriria a tela vizinha inteira e não sobraria por onde o
+mouse entrar nela.
+
+A coluna não passa da altura do frame e rola por dentro (`overflow-y: auto`). Como ela é
+contra-escalada, o teto é `100% * --scale` do layer, não `100%`. A roda sobre uma coluna que
+rola é dela (`stopPropagation` antes do board), e uma caixinha que abre é trazida à vista
+dentro da coluna (`revealInRail`) — não com `scrollIntoView` nem com o foco padrão, que
+rolariam também o `#viewport`.
+
+O
 painel de chat espelha a fila numa lista "a enviar" (`chat.js`), com o mesmo botão "x" por
 item; removê-lo em qualquer um dos dois lados chama o mesmo `removeCommentItem` e some dos
 dois. Ao apertar Enviar com algo na fila, `serializeCommentQueue` (`utils.js`, função pura)
@@ -1255,7 +1292,7 @@ E o que **fica por conta do usuário**, dito sem rodeio:
    | Atalho de teclado, botão, gesto | `src/client/controls.js` |
    | Largura da sidebar | `src/client/controls.js` |
    | Destaque de elemento, XPath | `src/client/inspect.js` |
-   | Fila de comentários endereçados à IA (caixinha, balão, reancoragem) | `src/client/inspect.js` (fila e gesto), `src/client/chat.js` (lista "a enviar" e envio) |
+   | Fila de comentários endereçados à IA (caixinha, balão, coluna, linhas, reancoragem) | `src/client/inspect.js` (fila e gesto), `src/client/chat.js` (lista "a enviar" e envio) |
    | Uma rota nova | `src/server/index.js` |
    | Um tipo de evento novo do watcher | `src/server/watcher.js` **e** `src/client/sse.js` |
    | O que é ou não um protótipo | `src/server/screens.js` |

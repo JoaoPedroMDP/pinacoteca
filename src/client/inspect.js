@@ -8,9 +8,9 @@
 
 import { ensureFloating } from './dom.js';
 import {
-  commentQueue, notifyQueueChange, onQueueChange, screens, ui, view,
+  commentQueue, commentRailSide, notifyQueueChange, onQueueChange, screens, ui, view,
 } from './state.js';
-import { clamp, computeXPath, resolveXPath } from './utils.js';
+import { clamp, computeXPath, rectsOverlap, resolveXPath } from './utils.js';
 import { copyText, showToast } from './feedback.js';
 
 /** @typedef {import('./state.js').CommentItem} CommentItem */
@@ -274,15 +274,37 @@ const mountedBoxes = new Map();
 const boxKey = (file, xpath) => `${file} ${xpath}`;
 
 /**
- * Posicao do elemento em coordenadas internas do iframe — o mesmo espaco que
- * `frame.style` usa, entao o balao/caixinha fica correto sob pan/zoom sem
- * recalculo (veja o `@property anchorPoint` em `state.js`).
- * @param {Element} el
- * @returns {{ x: number, y: number }}
+ * O no do prototipo de cada item, pela mesma chave de `openBoxKeys`. E so
+ * cache: a verdade e o XPath, e `anchoredElement` resolve de novo quando o no
+ * guardado ficou para tras (iframe recarregou, no saiu do documento).
+ * @type {Map<string, Element>}
  */
-function anchorFor(el) {
-  const rect = el.getBoundingClientRect();
-  return { x: rect.left, y: rect.top };
+const anchoredEls = new Map();
+
+/**
+ * O elemento vivo de um item — e dele que a linha mede a posicao a cada
+ * desenho, para acompanhar o scroll interno do prototipo.
+ * @param {string} file
+ * @param {CommentItem} item
+ * @returns {Element | null}
+ */
+function anchoredElement(file, item) {
+  const key = boxKey(file, item.xpath);
+  try {
+    const doc = screens.get(file)?.iframe.contentDocument;
+    if (!doc) return null;
+
+    const cached = anchoredEls.get(key);
+    if (cached?.isConnected && cached.ownerDocument === doc) return cached;
+
+    const el = resolveXPath(doc, item.xpath);
+    if (el) anchoredEls.set(key, el);
+    else anchoredEls.delete(key);
+    return el;
+  } catch {
+    // Iframe trocando de `src` no meio: sem elemento ate o proximo `load`.
+    return null;
+  }
 }
 
 /**
@@ -300,7 +322,6 @@ export function openCommentBoxAt(file, event) {
   if (!found) return;
 
   const xpath = computeXPath(found.el);
-  const anchorPoint = anchorFor(found.el);
 
   let items = commentQueue.get(file);
   if (!items) {
@@ -308,15 +329,13 @@ export function openCommentBoxAt(file, event) {
     commentQueue.set(file, items);
   }
 
-  const existing = items.get(xpath);
-  if (existing) {
-    existing.anchorPoint = anchorPoint;
-  } else {
+  if (!items.has(xpath)) {
     /** @type {CommentItem} */
-    const item = { xpath, text: '', status: 'draft', anchorPoint };
+    const item = { xpath, text: '', status: 'draft' };
     items.set(xpath, item);
   }
 
+  anchoredEls.set(boxKey(file, xpath), found.el);
   openBoxKeys.add(boxKey(file, xpath));
   notifyQueueChange();
 }
@@ -351,6 +370,7 @@ export function removeCommentItem(file, xpath) {
   items.delete(xpath);
   if (items.size === 0) commentQueue.delete(file);
   openBoxKeys.delete(boxKey(file, xpath));
+  anchoredEls.delete(boxKey(file, xpath));
   notifyQueueChange();
 }
 
@@ -370,13 +390,15 @@ export function tryReanchor(file, doc) {
     // Trancado por um envio em andamento: nao mexe, o turno decide o destino.
     if (item.status === 'sending') continue;
 
+    const key = boxKey(file, item.xpath);
     const el = resolveXPath(doc, item.xpath);
     if (el) {
-      item.anchorPoint = anchorFor(el);
+      anchoredEls.set(key, el);
       if (item.status === 'unreferenced') item.status = 'confirmed';
     } else {
       item.status = 'unreferenced';
-      openBoxKeys.delete(boxKey(file, item.xpath));
+      openBoxKeys.delete(key);
+      anchoredEls.delete(key);
     }
   }
 
@@ -404,6 +426,7 @@ function reanchorUnreferencedItem(fromFile, fromXPath, toFile, toEl) {
 
   items.delete(fromXPath);
   if (items.size === 0) commentQueue.delete(fromFile);
+  anchoredEls.delete(boxKey(fromFile, fromXPath));
 
   let destination = commentQueue.get(toFile);
   if (!destination) {
@@ -413,30 +436,54 @@ function reanchorUnreferencedItem(fromFile, fromXPath, toFile, toEl) {
 
   item.xpath = newXPath;
   item.status = 'confirmed';
-  item.anchorPoint = anchorFor(toEl);
+  anchoredEls.set(boxKey(toFile, newXPath), toEl);
   destination.set(newXPath, item);
 
   notifyQueueChange();
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 /**
- * Camada dos baloes/caixinhas de uma tela, criada sob demanda dentro do
- * `card` — nao do `frame` — assim ela herda o `transform` do canvas de graca
- * (como o escudo), mas escapa do `overflow: hidden` do `.card-frame`, que
- * cortava balao/caixinha perto da borda da tela. O CSS compensa o offset do
- * titulo para o layer continuar alinhado ao topo do frame (veja
- * `.pina-queue-layer` em board.css).
+ * Camada dos comentarios de uma tela, criada sob demanda dentro do `card` —
+ * nao do `frame` — assim ela herda o `transform` do canvas de graca (como o
+ * escudo), mas escapa do `overflow: hidden` do `.card-frame`, que cortaria a
+ * coluna ao lado da tela. O CSS compensa o offset do titulo para o layer
+ * continuar alinhado ao topo do frame (veja `.pina-queue-layer` em board.css),
+ * e e por isso que coordenada do layer e coordenada interna do iframe sao o
+ * mesmo espaco.
+ *
+ * Dentro dela: o `<svg>` das linhas, cobrindo o frame, e a coluna com baloes e
+ * caixinhas empilhados, ao lado dele.
  * @param {Screen} screen
- * @returns {HTMLElement}
+ * @returns {{ layer: HTMLElement, links: SVGSVGElement, rail: HTMLElement }}
  */
 function ensureQueueLayer(screen) {
   let layer = /** @type {HTMLElement | null} */ (screen.card.querySelector(':scope > .pina-queue-layer'));
   if (!layer) {
     layer = document.createElement('div');
     layer.className = 'pina-queue-layer';
+
+    const links = document.createElementNS(SVG_NS, 'svg');
+    links.classList.add('pina-comment-links');
+
+    const rail = document.createElement('div');
+    rail.className = 'pina-comment-rail';
+    // A roda sobre uma coluna que rola e da coluna; sem rolagem, segue para o
+    // board (zoom/pan) como em qualquer outro ponto.
+    rail.addEventListener('wheel', (event) => {
+      if (rail.scrollHeight > rail.clientHeight) event.stopPropagation();
+    });
+    rail.addEventListener('scroll', () => scheduleCommentLinks(screen.file));
+
+    layer.append(links, rail);
     screen.card.append(layer);
   }
-  return layer;
+  return {
+    layer,
+    links: /** @type {SVGSVGElement} */ (layer.querySelector(':scope > .pina-comment-links')),
+    rail: /** @type {HTMLElement} */ (layer.querySelector(':scope > .pina-comment-rail')),
+  };
 }
 
 /**
@@ -461,15 +508,19 @@ function makeRemoveBadge(onRemove) {
 }
 
 /**
- * Posiciona um balao/caixinha sobre o no ancorado. Fica separado do desenho
- * porque a caixinha reaproveitada precisa dele sozinho: ela nao e remontada,
- * so reposicionada.
+ * Rola a coluna o minimo para o no ficar inteiro a vista. Nao e
+ * `scrollIntoView`: ele tambem rolaria o `#viewport` (que tem
+ * `overflow: hidden`, mas rola por script) e desalinharia o board.
  * @param {HTMLElement} node
- * @param {CommentItem} item
  */
-function anchorNode(node, item) {
-  node.style.left = `${item.anchorPoint?.x ?? 0}px`;
-  node.style.top = `${item.anchorPoint?.y ?? 0}px`;
+function revealInRail(node) {
+  const rail = node.parentElement;
+  if (!rail) return;
+
+  const top = node.offsetTop;
+  const bottom = top + node.offsetHeight;
+  if (top < rail.scrollTop) rail.scrollTop = top;
+  else if (bottom > rail.scrollTop + rail.clientHeight) rail.scrollTop = bottom - rail.clientHeight;
 }
 
 /**
@@ -482,7 +533,7 @@ function anchorNode(node, item) {
 function buildCommentBox(file, item) {
   const box = document.createElement('div');
   box.className = 'pina-comment-box';
-  anchorNode(box, item);
+  box.dataset.xpath = item.xpath;
   // O board (escudo por baixo) nao deve iniciar pan/gesto por cima da caixinha.
   box.addEventListener('pointerdown', (event) => event.stopPropagation());
 
@@ -503,8 +554,12 @@ function buildCommentBox(file, item) {
   box.append(textarea, makeRemoveBadge(() => removeCommentItem(file, item.xpath)));
   // A caixinha acabou de abrir: o usuario ja quer digitar. `setTimeout(0)` em
   // vez de focar direto porque o elemento ainda nao esta no DOM neste ponto —
-  // quem chama `buildCommentBox` so anexa o resultado depois.
-  setTimeout(() => textarea.focus(), 0);
+  // quem chama `buildCommentBox` so anexa o resultado depois. `preventScroll`
+  // pelo mesmo motivo de `revealInRail`: o foco nativo rolaria o board.
+  setTimeout(() => {
+    textarea.focus({ preventScroll: true });
+    revealInRail(box);
+  }, 0);
   return box;
 }
 
@@ -518,7 +573,7 @@ function buildCommentBox(file, item) {
 function buildBalloon(file, item) {
   const balloon = document.createElement('div');
   balloon.className = 'pina-comment-balloon';
-  anchorNode(balloon, item);
+  balloon.dataset.xpath = item.xpath;
 
   const summary = document.createElement('span');
   summary.className = 'pina-comment-summary';
@@ -553,10 +608,7 @@ function buildBalloon(file, item) {
  */
 function commentBoxFor(key, file, item) {
   const mounted = mountedBoxes.get(key);
-  if (mounted) {
-    anchorNode(mounted, item);
-    return mounted;
-  }
+  if (mounted) return mounted;
 
   const box = buildCommentBox(file, item);
   mountedBoxes.set(key, box);
@@ -564,15 +616,14 @@ function commentBoxFor(key, file, item) {
 }
 
 /**
- * Redesenha baloes e caixinhas de uma tela a partir da fila. Itens
+ * Redesenha a coluna de uma tela a partir da fila, na ordem da fila. Itens
  * `unreferenced` ficam de fora — eles vao para a bandeja
  * (`renderUnreferencedTray`), nao pro card.
  *
- * O layer nao e esvaziado de uma vez: so os nos que **sairam** da fila sao
- * removidos, e os que continuam ficam onde estao. Trocar tudo tiraria do DOM
- * tambem a caixinha aberta, e com ela o foco e a composicao do teclado. Como
- * balao e caixinha sao posicionados em absoluto, a ordem dentro do layer nao
- * importa — o que entra depois pode simplesmente ser anexado no fim.
+ * A coluna nao e esvaziada de uma vez: so os nos que **sairam** da fila sao
+ * removidos, e os outros entram antes ou depois da caixinha aberta sem que ela
+ * saia do lugar. Trocar tudo — ou mover a caixinha — tiraria ela do DOM, e com
+ * ela o foco e a composicao do teclado.
  *
  * @param {string} file
  */
@@ -580,28 +631,151 @@ function renderQueueForFile(file) {
   const screen = screens.get(file);
   if (!screen) return;
 
-  const layer = ensureQueueLayer(screen);
+  const { rail } = ensureQueueLayer(screen);
+  rail.classList.toggle('is-left', commentRailSide.get(file) === 'left');
 
-  /** Nos que devem continuar na tela depois deste redesenho. @type {Set<Element>} */
-  const kept = new Set();
-  /** Nos recem-criados, ainda fora do layer. @type {HTMLElement[]} */
-  const fresh = [];
-
+  /** @type {HTMLElement[]} */
+  const nodes = [];
   for (const item of commentQueue.get(file)?.values() ?? []) {
-    if (item.status === 'unreferenced' || !item.anchorPoint) continue;
+    if (item.status === 'unreferenced') continue;
 
     const key = boxKey(file, item.xpath);
     const boxOpen = item.status !== 'sending' && openBoxKeys.has(key);
-    const node = boxOpen ? commentBoxFor(key, file, item) : buildBalloon(file, item);
-
-    kept.add(node);
-    if (node.parentNode !== layer) fresh.push(node);
+    nodes.push(boxOpen ? commentBoxFor(key, file, item) : buildBalloon(file, item));
   }
 
-  for (const child of [...layer.children]) {
+  /** @type {Set<Element>} */
+  const kept = new Set(nodes);
+  for (const child of [...rail.children]) {
     if (!kept.has(child)) child.remove();
   }
-  layer.append(...fresh);
+  // So os baloes recem-criados entram aqui: quem ja esta na posicao certa (a
+  // caixinha aberta) e pulado, e o `insertBefore` dos outros nao a move.
+  nodes.forEach((node, index) => {
+    const current = rail.children[index] ?? null;
+    if (current !== node) rail.insertBefore(node, current);
+  });
+
+  refreshLinks(file);
+}
+
+/* ---------- Linhas entre a coluna e o no ---------- */
+
+/** Arquivos com linhas a redesenhar no proximo quadro. @type {Set<string>} */
+const pendingLinks = new Set();
+let linksFrame = 0;
+
+/**
+ * Agenda o redesenho das linhas para o proximo quadro. Scroll do prototipo,
+ * scroll da coluna e zoom disparam muitas vezes por quadro; medir a cada um
+ * seria trabalho jogado fora.
+ * @param {string} [file] sem arquivo, todas as telas com comentario (zoom)
+ */
+export function scheduleCommentLinks(file) {
+  if (file) pendingLinks.add(file);
+  else for (const queued of commentQueue.keys()) pendingLinks.add(queued);
+
+  if (linksFrame || pendingLinks.size === 0) return;
+  linksFrame = window.requestAnimationFrame(() => {
+    linksFrame = 0;
+    const files = [...pendingLinks];
+    pendingLinks.clear();
+    for (const queued of files) refreshLinks(queued);
+  });
+}
+
+/**
+ * Redesenha as linhas de uma tela: cada balao/caixinha da coluna ate o no do
+ * seu item, medido ao vivo.
+ *
+ * Tudo e desenhado no espaco do layer, que e o espaco interno do iframe (veja
+ * `ensureQueueLayer`): o rect do no, lido de dentro do iframe, ja vem nele. Ja
+ * o rect do item da coluna vem em px de tela, e e dividido por `view.scale`.
+ *
+ * Uma ponta que nao esta a vista — no rolado para fora do frame, item rolado
+ * para fora da coluna — e presa a borda e a linha fica apagada e tracejada,
+ * dizendo "esta para la".
+ * @param {string} file
+ */
+function refreshLinks(file) {
+  const screen = screens.get(file);
+  const layerEl = screen?.card.querySelector(':scope > .pina-queue-layer');
+  if (!screen || !layerEl) return;
+
+  const { layer, links, rail } = ensureQueueLayer(screen);
+  const onLeft = rail.classList.contains('is-left');
+  const layerRect = layer.getBoundingClientRect();
+  const railRect = rail.getBoundingClientRect();
+  const width = screen.frame.clientWidth;
+  const height = screen.frame.clientHeight;
+
+  /** @type {SVGElement[]} */
+  const drawn = [];
+  for (const node of /** @type {HTMLCollectionOf<HTMLElement>} */ (rail.children)) {
+    const item = commentQueue.get(file)?.get(node.dataset.xpath ?? '');
+    const el = item ? anchoredElement(file, item) : null;
+    if (!el) continue;
+
+    // Ponta da coluna: borda do item voltada para o frame, na altura da
+    // primeira linha de texto (o centro de uma caixinha alta ficaria longe).
+    const nodeRect = node.getBoundingClientRect();
+    const rawY = nodeRect.top + Math.min(nodeRect.height / 2, 14);
+    const railY = clamp(rawY, railRect.top, railRect.bottom);
+    const startX = ((onLeft ? nodeRect.right : nodeRect.left) - layerRect.left) / view.scale;
+    const startY = (railY - layerRect.top) / view.scale;
+
+    // Ponta do no: borda voltada para a coluna, presa ao frame.
+    const elRect = el.getBoundingClientRect();
+    const endX = clamp(onLeft ? elRect.left : elRect.right, 0, width);
+    const endY = clamp(elRect.top + Math.min(elRect.height / 2, 12), 0, height);
+
+    const hidden = railY !== rawY || elRect.bottom < 0 || elRect.top > height;
+    const midX = (startX + endX) / 2;
+
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.classList.add('pina-comment-link');
+    path.classList.toggle('is-hidden-end', hidden);
+    path.setAttribute('d', `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`);
+
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.classList.add('pina-comment-link-dot');
+    dot.classList.toggle('is-hidden-end', hidden);
+    dot.setAttribute('cx', String(endX));
+    dot.setAttribute('cy', String(endY));
+
+    drawn.push(path, dot);
+  }
+
+  links.replaceChildren(...drawn);
+}
+
+/**
+ * O mouse entrou numa tela: a coluna de comentarios de qualquer outra tela que
+ * esteja por cima dela troca de lado, saindo da frente.
+ *
+ * Nao importa saber qual tela esta a esquerda de qual: a pergunta e so "esta
+ * coluna encosta na tela em hover?", e a regra e "afastar dela". Os rects sao
+ * os de tela (`getBoundingClientRect`), que ja trazem pan, zoom e a
+ * contra-escala da coluna — a mesma conta em coordenadas do board teria de
+ * refazer essa contra-escala a mao.
+ * @param {string} file
+ */
+export function onCardHover(file) {
+  const hovered = screens.get(file)?.frame.getBoundingClientRect();
+  if (!hovered) return;
+
+  for (const other of screens.values()) {
+    if (other.file === file) continue;
+
+    const rail = other.card.querySelector(':scope > .pina-queue-layer > .pina-comment-rail');
+    if (!rail || rail.childElementCount === 0) continue;
+    if (!rectsOverlap(rail.getBoundingClientRect(), hovered)) continue;
+
+    const side = commentRailSide.get(other.file) === 'left' ? 'right' : 'left';
+    commentRailSide.set(other.file, side);
+    rail.classList.toggle('is-left', side === 'left');
+    refreshLinks(other.file);
+  }
 }
 
 /**

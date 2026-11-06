@@ -1147,6 +1147,153 @@ await checkEventually('Alt+clique sozinho abre a caixinha em vez de copiar o XPa
 await board.evaluate("window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Alt' }))");
 await board.evaluate("document.querySelector('.pina-comment-box .pina-comment-remove').click()");
 
+/* ---------- Coluna de comentarios e linhas ---------- */
+
+process.stdout.write('\nColuna de comentarios e linhas\n');
+
+/** @param {string} file */
+const cardOf = (file) => `[...document.querySelectorAll('.card')]
+  .find((c) => c.querySelector('iframe').src.includes(${JSON.stringify(file)}))`;
+const loginLinkDotY = () => board.evaluate(
+  `Number(${cardOf('login.html')}.querySelector('.pina-comment-link-dot')?.getAttribute('cy') ?? NaN)`,
+);
+/** @param {number} y */
+const scrollLogin = (y) => board.evaluate(`${cardOf('login.html')}.querySelector('iframe').contentWindow.scrollTo(0, ${y})`);
+
+await board.evaluate(gestureOn('login.html', "PointerEvent('pointerdown'", 'button: 0,'));
+await typeInBox('acompanha o scroll');
+await pressInBox();
+await checkEventually('o balao confirmado entra na coluna ao lado da tela', async () => (
+  await board.evaluate(`${cardOf('login.html')}.querySelector('.pina-comment-rail .pina-comment-balloon') !== null`)));
+check('a coluna fica fora do frame, a direita dele', await board.evaluate(`(() => {
+  const card = ${cardOf('login.html')};
+  return card.querySelector('.pina-comment-rail').getBoundingClientRect().left
+    >= card.querySelector('.card-frame').getBoundingClientRect().right;
+})()`));
+await checkEventually('uma linha liga o balao ao no comentado', async () => Number.isFinite(await loginLinkDotY()));
+
+// Um conteudo bem mais alto que o frame faz o prototipo rolar por dentro, que
+// e o caso em que o balao antigo ficava para tras. A tela fica com tamanho
+// "escolhido" durante o teste, senao o proximo silencio da pasta (`settle`) a
+// remediria para caber o conteudo inteiro e nao haveria scroll.
+const loginWasSized = await board.evaluate(`import('/app/state.js').then((m) => {
+  const screen = m.screens.get('login.html');
+  const was = screen.sized;
+  screen.sized = true;
+  return was;
+})`);
+await board.evaluate(`(() => {
+  const doc = ${cardOf('login.html')}.querySelector('iframe').contentDocument;
+  const filler = doc.createElement('div');
+  filler.id = 'pina-test-filler';
+  filler.style.height = '5000px';
+  doc.body.append(filler);
+})()`);
+const dotBeforeScroll = await loginLinkDotY();
+await scrollLogin(10);
+await checkEventually('rolar o prototipo leva a ponta da linha junto com o no',
+  async () => Math.abs((await loginLinkDotY()) - (dotBeforeScroll - 10)) < 1);
+
+await scrollLogin(2000);
+await checkEventually('no rolado para fora do frame: a linha fica presa a borda e apagada', async () => (
+  await board.evaluate(`${cardOf('login.html')}.querySelector('.pina-comment-link.is-hidden-end') !== null`)));
+check('e a ponta presa fica no topo do frame', (await loginLinkDotY()) === 0);
+
+await scrollLogin(0);
+await board.evaluate(`${cardOf('login.html')}.querySelector('iframe').contentDocument.getElementById('pina-test-filler').remove()`);
+await board.evaluate(`import('/app/state.js').then((m) => { m.screens.get('login.html').sized = ${loginWasSized}; })`);
+
+// Outra tela encostada a direita: a coluna da login fica por cima dela.
+const dashboardStyle = await board.evaluate(`(() => {
+  const login = ${cardOf('login.html')};
+  const dashboard = ${cardOf('dashboard.html')};
+  const saved = { left: dashboard.style.left, top: dashboard.style.top };
+  dashboard.style.left = (Number.parseFloat(login.style.left) + login.offsetWidth + 40) + 'px';
+  dashboard.style.top = login.style.top;
+  return saved;
+})()`);
+const loginRailOnLeft = () => board.evaluate(
+  `${cardOf('login.html')}.querySelector('.pina-comment-rail').classList.contains('is-left')`,
+);
+check('com a outra tela ao lado, a coluna comeca a direita, por cima dela', (await loginRailOnLeft()) === false);
+
+await board.evaluate(`${cardOf('dashboard.html')}.dispatchEvent(new PointerEvent('pointerenter'))`);
+check('o mouse entrar na tela coberta manda a coluna para o outro lado', await loginRailOnLeft());
+check('do lado esquerdo, a coluna fica fora do frame, a esquerda dele', await board.evaluate(`(() => {
+  const card = ${cardOf('login.html')};
+  return card.querySelector('.pina-comment-rail').getBoundingClientRect().right
+    <= card.querySelector('.card-frame').getBoundingClientRect().left;
+})()`));
+
+await board.evaluate(`${cardOf('dashboard.html')}.dispatchEvent(new PointerEvent('pointerenter'))`);
+check('entrar de novo, ja sem sobreposicao, nao a devolve', await loginRailOnLeft());
+
+await board.evaluate(`(() => {
+  const dashboard = ${cardOf('dashboard.html')};
+  dashboard.style.left = ${JSON.stringify(dashboardStyle.left)};
+  dashboard.style.top = ${JSON.stringify(dashboardStyle.top)};
+})()`);
+await board.evaluate("import('/app/state.js').then((m) => m.commentRailSide.delete('login.html'))");
+await board.evaluate(`${cardOf('login.html')}.querySelector('.pina-comment-balloon .pina-comment-remove').click()`);
+await checkEventually('balao do teste da coluna removido', async () => (await balloonCount()) === 0);
+
+// Muitos comentarios numa tela so: a coluna para na altura do frame e rola.
+await board.evaluate(`import('/app/state.js').then((m) => {
+  const items = new Map();
+  for (let i = 1; i <= 40; i += 1) {
+    const xpath = '/html/body/p[' + i + ']';
+    items.set(xpath, { xpath, text: 'comentario ' + i, status: 'confirmed' });
+  }
+  m.commentQueue.set('solo.html', items);
+  m.notifyQueueChange();
+})`);
+const soloRail = await board.evaluate(`(() => {
+  const card = ${cardOf('solo.html')};
+  const rail = card.querySelector('.pina-comment-rail');
+  return {
+    count: rail.childElementCount,
+    scrolls: rail.scrollHeight > rail.clientHeight,
+    railHeight: rail.getBoundingClientRect().height,
+    frameHeight: card.querySelector('.card-frame').getBoundingClientRect().height,
+  };
+})()`);
+check('com muitos comentarios todos entram na coluna', soloRail.count === 40, JSON.stringify(soloRail));
+check('a coluna nao passa da altura da tela', soloRail.railHeight <= soloRail.frameHeight + 1, JSON.stringify(soloRail));
+check('e rola por dentro', soloRail.scrolls, JSON.stringify(soloRail));
+
+await board.evaluate("import('/app/state.js').then((m) => { m.commentQueue.delete('solo.html'); m.notifyQueueChange(); })");
+await checkEventually('coluna da solo esvaziada', async () => (await balloonCount()) === 0);
+
+// Comentario longo no zoom afastado: o balao nao passa de meia tela padrao
+// (CARD_WIDTH / 2) e a coluna deixa o ponteiro passar para a tela de baixo.
+const longComment = await board.evaluate(`import('/app/state.js').then((m) => {
+  const xpath = '/html/body/h1';
+  m.commentQueue.set('solo.html', new Map([[xpath, { xpath, text: 'muito longo '.repeat(40), status: 'confirmed' }]]));
+  m.notifyQueueChange();
+  const saved = m.view.scale;
+  return import('/app/view.js').then((v) => {
+    m.view.scale = 0.1;
+    v.applyTransform();
+    const card = ${cardOf('solo.html')};
+    const rail = card.querySelector('.pina-comment-rail');
+    const balloon = rail.querySelector('.pina-comment-balloon');
+    const result = {
+      railPointer: getComputedStyle(rail).pointerEvents,
+      balloonPointer: getComputedStyle(balloon).pointerEvents,
+      width: balloon.getBoundingClientRect().width,
+      limit: 640 * m.view.scale,
+    };
+    m.view.scale = saved;
+    v.applyTransform();
+    m.commentQueue.delete('solo.html');
+    m.notifyQueueChange();
+    return result;
+  });
+})`);
+check('comentario longo nao passa de meia tela padrao', longComment.width <= longComment.limit + 1, JSON.stringify(longComment));
+check('a coluna deixa o ponteiro passar para a tela de baixo', longComment.railPointer === 'none', JSON.stringify(longComment));
+check('so o balao pega o ponteiro', longComment.balloonPointer === 'auto', JSON.stringify(longComment));
+
 /* ---------- Envio da fila e ciclo de carregamento ---------- */
 
 process.stdout.write('\nEnvio da fila e ciclo de carregamento\n');
