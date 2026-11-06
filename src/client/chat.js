@@ -28,6 +28,7 @@ import {
 } from './storage.js';
 import { renderConversations } from './conversations.js';
 import { normalizeQuestions, serializeCommentQueue, toolTarget } from './utils.js';
+import { renderMarkdown } from './markdown.js';
 import { showToast } from './feedback.js';
 
 /* ---------- Elementos ---------- */
@@ -305,7 +306,7 @@ function makeButton(label, className) {
 export function appendUserMessage(text) {
   const bubble = makeBlock('chat-msg is-user', text);
   appendBlock(bubble);
-  chat.messages.push({ role: 'user', text, bubble });
+  chat.messages.push({ role: 'user', text, bubble, renderQueued: false });
   return bubble;
 }
 
@@ -314,11 +315,11 @@ export function appendUserMessage(text) {
  * @returns {import('./state.js').ChatMessage}
  */
 function beginAssistantMessage() {
-  const bubble = makeBlock('chat-msg is-assistant');
+  const bubble = makeBlock('chat-msg is-assistant is-markdown');
   appendBlock(bubble);
 
   /** @type {import('./state.js').ChatMessage} */
-  const message = { role: 'assistant', text: '', bubble };
+  const message = { role: 'assistant', text: '', bubble, renderQueued: false };
   chat.messages.push(message);
   chat.streaming = message;
   return message;
@@ -326,13 +327,20 @@ function beginAssistantMessage() {
 
 /**
  * Acrescenta texto a resposta em andamento, abrindo a bolha se ainda nao houver.
+ *
+ * O texto cru acumula a cada delta; o markdown e redesenhado no maximo uma vez
+ * por quadro. Reparsear a resposta inteira a cada pedacinho do stream seria
+ * trabalho jogado fora entre dois quadros.
  * @param {string} delta
  */
 export function appendAssistantDelta(delta) {
   const message = chat.streaming ?? beginAssistantMessage();
-  keepPinned(() => {
-    message.text += delta;
-    message.bubble.textContent = message.text;
+  message.text += delta;
+  if (message.renderQueued) return;
+  message.renderQueued = true;
+  window.requestAnimationFrame(() => {
+    message.renderQueued = false;
+    keepPinned(() => renderMarkdown(message.bubble, message.text));
   });
 }
 

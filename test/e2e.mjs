@@ -943,6 +943,29 @@ await checkEventually('texto depois de uma ferramenta abre bolha nova no fim do 
       && document.getElementById('chat-log').lastElementChild === bubbles[1];
   })()`)));
 
+// Markdown na resposta: vira elemento de verdade, e HTML cru continua texto.
+await board.evaluate(`import('/app/chat.js').then((m) => {
+  m.appendToolUse({ id: 'md-sep', name: 'Read', input: {} });
+  m.appendAssistantDelta('## Titulo\\n\\nUm **forte** e \`codigo\`');
+  m.appendAssistantDelta('\\n\\n- item\\n\\n<script>window.__mdXss = 1</script>');
+})`);
+
+await checkEventually('a resposta do assistente desenha markdown', async () => (
+  await board.evaluate(`(() => {
+    const bubble = [...document.querySelectorAll('#chat-log .chat-msg.is-assistant')].at(-1);
+    return !!bubble
+      && bubble.querySelector('h2')?.textContent === 'Titulo'
+      && bubble.querySelector('strong')?.textContent === 'forte'
+      && bubble.querySelector('code')?.textContent === 'codigo'
+      && bubble.querySelector('ul > li')?.textContent === 'item';
+  })()`)));
+
+check('HTML cru na resposta do assistente fica como texto', await board.evaluate(`(() => {
+  const bubble = [...document.querySelectorAll('#chat-log .chat-msg.is-assistant')].at(-1);
+  return !bubble.querySelector('script') && bubble.textContent.includes('<script>')
+    && window.__mdXss === undefined;
+})()`));
+
 // Acao igual, mesmo arquivo, logo em seguida: uma linha so com contador. Um
 // arquivo diferente abre linha nova.
 await board.evaluate(`(async () => {

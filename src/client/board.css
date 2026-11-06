@@ -645,6 +645,114 @@ body {
   background: var(--bg);
 }
 
+/* Markdown da resposta (markdown.js). As quebras ja viram <br>/<p>, entao o
+   pre-wrap da bolha sai; so o bloco de codigo preserva espaco. Tudo em `em`,
+   relativo a fonte do painel. */
+.chat-msg.is-markdown {
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.is-markdown > :first-child { margin-top: 0; }
+.is-markdown > :last-child { margin-bottom: 0; }
+
+.is-markdown p,
+.is-markdown ul,
+.is-markdown ol,
+.is-markdown pre,
+.is-markdown blockquote,
+.is-markdown .md-table {
+  margin: 0.5em 0;
+}
+
+.is-markdown h1,
+.is-markdown h2,
+.is-markdown h3,
+.is-markdown h4,
+.is-markdown h5,
+.is-markdown h6 {
+  margin: 0.8em 0 0.4em;
+  line-height: 1.3;
+}
+
+.is-markdown h1 { font-size: 1.3em; }
+.is-markdown h2 { font-size: 1.18em; }
+.is-markdown h3 { font-size: 1.06em; }
+.is-markdown h4,
+.is-markdown h5,
+.is-markdown h6 { font-size: 1em; }
+
+.is-markdown ul,
+.is-markdown ol {
+  padding-left: 1.4em;
+}
+
+/* Item de lista com um paragrafo so nao ganha espaco a mais. */
+.is-markdown li > p { margin: 0; }
+.is-markdown li + li { margin-top: 0.2em; }
+.is-markdown li > ul,
+.is-markdown li > ol { margin: 0.2em 0; }
+
+.is-markdown code {
+  font: 0.92em ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--bg-panel);
+}
+
+.is-markdown pre {
+  padding: 0.6em 0.8em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.is-markdown pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.92em;
+  line-height: 1.5;
+}
+
+.is-markdown blockquote {
+  padding-left: 0.8em;
+  border-left: 3px solid var(--border);
+  color: var(--text-muted);
+}
+
+.is-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.8em 0;
+}
+
+.is-markdown a {
+  color: var(--accent);
+}
+
+.is-markdown .md-table {
+  overflow-x: auto;
+}
+
+.is-markdown table {
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.is-markdown th,
+.is-markdown td {
+  padding: 0.3em 0.6em;
+  border: 1px solid var(--border);
+  text-align: left;
+  overflow-wrap: normal;
+}
+
+.is-markdown th {
+  background: var(--bg-panel);
+}
+
 .chat-thinking {
   border: 1px solid var(--border);
   border-radius: 8px;

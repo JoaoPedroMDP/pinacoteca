@@ -36,6 +36,7 @@ import {
   resolveXPath, separateOverlaps, serializeCommentQueue, snapToGrid, sortNames,
   toolTarget,
 } from '../src/client/utils.js';
+import { parseInline, parseMarkdown } from '../src/client/markdown.js';
 
 /* ---------- cli.js ---------- */
 
@@ -1280,4 +1281,127 @@ test('toolTarget devolve vazio para entrada sem arquivo', () => {
   assert.equal(toolTarget('login.html'), '');
   assert.equal(toolTarget(null), '');
   assert.equal(toolTarget(undefined), '');
+});
+
+/* ---------- markdown.js ---------- */
+
+/** @param {string} text */
+const t = (text) => ({ type: 'text', text });
+
+test('parseInline le negrito, italico, riscado e codigo', () => {
+  assert.deepEqual(parseInline('a **b** *c* ~~d~~ `e`'), [
+    t('a '), { type: 'strong', children: [t('b')] }, t(' '),
+    { type: 'em', children: [t('c')] }, t(' '),
+    { type: 'del', children: [t('d')] }, t(' '),
+    { type: 'code', text: 'e' },
+  ]);
+});
+
+test('parseInline aninha italico dentro de negrito', () => {
+  assert.deepEqual(parseInline('**a *b* c**'), [
+    { type: 'strong', children: [t('a '), { type: 'em', children: [t('b')] }, t(' c')] },
+  ]);
+});
+
+test('parseInline deixa delimitador sem fechamento como texto', () => {
+  assert.deepEqual(parseInline('**negrito em curso'), [t('**negrito em curso')]);
+  assert.deepEqual(parseInline('2 * 3 * 4'), [t('2 * 3 * 4')]);
+});
+
+test('parseInline nao trata snake_case como italico', () => {
+  assert.deepEqual(parseInline('use snake_case_name aqui'), [t('use snake_case_name aqui')]);
+});
+
+test('parseInline nao interpreta delimitador dentro de codigo', () => {
+  assert.deepEqual(parseInline('`a*b*c`'), [{ type: 'code', text: 'a*b*c' }]);
+});
+
+test('parseInline respeita escape com barra', () => {
+  assert.deepEqual(parseInline('\\*nao\\*'), [t('*'), t('nao'), t('*')]);
+});
+
+test('parseInline aceita link http e recusa javascript:', () => {
+  assert.deepEqual(parseInline('[site](https://x.dev)'), [
+    { type: 'link', href: 'https://x.dev', children: [t('site')] },
+  ]);
+  assert.deepEqual(parseInline('[mal](javascript:alert(1))'), [t('mal'), t(')')]);
+});
+
+test('parseInline transforma URL solta em link sem levar a pontuacao', () => {
+  assert.deepEqual(parseInline('veja https://x.dev/a.'), [
+    t('veja '), { type: 'link', href: 'https://x.dev/a', children: [t('https://x.dev/a')] }, t('.'),
+  ]);
+});
+
+test('parseInline transforma quebra de linha em br', () => {
+  assert.deepEqual(parseInline('a\nb'), [t('a'), { type: 'br' }, t('b')]);
+});
+
+test('parseMarkdown separa titulo, paragrafo e linha horizontal', () => {
+  assert.deepEqual(parseMarkdown('# Titulo\n\ntexto\n\n---'), [
+    { type: 'heading', level: 1, inlines: [t('Titulo')] },
+    { type: 'paragraph', inlines: [t('texto')] },
+    { type: 'hr' },
+  ]);
+});
+
+test('parseMarkdown le bloco de codigo com linguagem', () => {
+  assert.deepEqual(parseMarkdown('```js\nconst a = 1;\n\n**x**\n```\ndepois'), [
+    { type: 'code', lang: 'js', text: 'const a = 1;\n\n**x**' },
+    { type: 'paragraph', inlines: [t('depois')] },
+  ]);
+});
+
+test('parseMarkdown leva bloco de codigo sem fechamento ate o fim (streaming)', () => {
+  assert.deepEqual(parseMarkdown('```\nmeio do'), [{ type: 'code', lang: '', text: 'meio do' }]);
+});
+
+test('parseMarkdown le lista aninhada', () => {
+  assert.deepEqual(parseMarkdown('- a\n  - b\n- c'), [{
+    type: 'list', ordered: false, start: 1, items: [
+      [
+        { type: 'paragraph', inlines: [t('a')] },
+        { type: 'list', ordered: false, start: 1, items: [[{ type: 'paragraph', inlines: [t('b')] }]] },
+      ],
+      [{ type: 'paragraph', inlines: [t('c')] }],
+    ],
+  }]);
+});
+
+test('parseMarkdown guarda o numero inicial de lista ordenada', () => {
+  const [list] = parseMarkdown('3. tres\n4. quatro');
+  assert.equal(list.type, 'list');
+  assert.equal(list.type === 'list' && list.ordered, true);
+  assert.equal(list.type === 'list' && list.start, 3);
+  assert.equal(list.type === 'list' && list.items.length, 2);
+});
+
+test('parseMarkdown junta itens separados por linha em branco numa lista so', () => {
+  const blocks = parseMarkdown('- a\n\n- b');
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].type === 'list' && blocks[0].items.length, 2);
+});
+
+test('parseMarkdown le citacao com blocos dentro', () => {
+  assert.deepEqual(parseMarkdown('> **nota**\n> segue'), [{
+    type: 'quote', blocks: [{
+      type: 'paragraph',
+      inlines: [{ type: 'strong', children: [t('nota')] }, { type: 'br' }, t('segue')],
+    }],
+  }]);
+});
+
+test('parseMarkdown le tabela com alinhamento', () => {
+  assert.deepEqual(parseMarkdown('intro\n| a | b |\n|:--|--:|\n| 1 | 2 |'), [
+    { type: 'paragraph', inlines: [t('intro')] },
+    {
+      type: 'table', align: ['left', 'right'],
+      head: [[t('a')], [t('b')]],
+      rows: [[[t('1')], [t('2')]]],
+    },
+  ]);
+});
+
+test('parseMarkdown nao confunde barra solta com tabela', () => {
+  assert.deepEqual(parseMarkdown('a | b'), [{ type: 'paragraph', inlines: [t('a | b')] }]);
 });

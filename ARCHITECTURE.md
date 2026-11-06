@@ -601,6 +601,7 @@ Sem framework e sem bundler, mas dividido em módulos ES nativos. `index.html` c
 | `src/client/sse.js` | eventos do servidor aplicados no board |
 | `src/client/tabs.js` | as abas da sidebar e as subabas da conversa: qual painel está visível |
 | `src/client/chat.js` | o painel de conversa: compositor, histórico, log e as bolhas |
+| `src/client/markdown.js` | o markdown da resposta do agente: parser puro e o desenho em DOM |
 | `src/client/conversations.js` | a subaba `Conversas`: a lista, criar, abrir e apagar |
 | `src/client/chat-client.js` | o transporte da conversa: as rotas `/api/chat/` |
 
@@ -660,7 +661,8 @@ Duas regras seguram essa divisão:
   (só um aparece por vez), e o badge de Shift+Enter fica preso ao canto do que estiver
   visível. Todo texto que vem do modelo ou dos arquivos do
   usuário entra por `textContent`, nunca por `innerHTML`: é conteúdo de fora, e o board o
-  trata como tal. O log acompanha o fim só para quem já estava no fim — quem rolou para
+  trata como tal. Isso vale também para a resposta do assistente, que é desenhada como
+  markdown (veja "A resposta do agente é markdown"). O log acompanha o fim só para quem já estava no fim — quem rolou para
   cima para ler não tem a viewport arrastada. O painel inteiro usa uma fonte menor que a
   do resto do board, e os tamanhos de dentro dele são relativos a ela (`em`): a coluna é
   estreita e empilha bolha, ferramenta, diff e permissão coladas, então o corpo do board
@@ -672,6 +674,33 @@ Duas regras seguram essa divisão:
   `CHAT_DRAFT_DEBOUNCE_MS`; e a seta pra cima percorre as mensagens já enviadas, mas só
   quando o cursor está na ponta certa do texto, para não roubar a navegação de dentro do
   campo.
+
+#### A resposta do agente é markdown
+
+O modelo responde em markdown — título, lista, código, tabela —, e mostrar isso cru numa
+coluna estreita deixava a resposta difícil de ler. `markdown.js` tem duas metades: o
+parser (`parseMarkdown`, puro, testado em `unit.mjs`), que transforma o texto numa árvore
+de blocos e inlines, e `renderMarkdown`, que monta essa árvore em DOM.
+
+**O desenho nunca usa `innerHTML`.** Cada nó nasce de `createElement` e cada texto entra
+por `textContent`, então um `<script>` no meio da resposta vira texto, e não tag. Link só
+existe para `http(s)` e `mailto`, abre em aba nova com `rel="noopener noreferrer"`; um
+`javascript:` vira o rótulo em texto puro. Não há dependência nova: um parser pronto
+devolveria HTML em string, e aí seria preciso sanitizá-lo — o oposto da regra do painel.
+
+O que cobre é o que um modelo escreve numa resposta de chat (título, parágrafo, negrito,
+itálico, riscado, código inline e em bloco, lista aninhada, citação, linha horizontal,
+link, URL solta e tabela). Quebra de linha dentro do parágrafo vira `<br>`, e não espaço
+como no CommonMark: num chat o modelo quebra linha porque quer a linha quebrada.
+Markdown incompleto — o caso comum no meio do streaming, um `**` ainda sem par, um bloco
+de código ainda sem a cerca de fechamento — sai como texto (ou como código até o fim) até
+o fechamento chegar.
+
+`message.text` continua sendo a fonte da verdade e acumula cru a cada delta; o redesenho
+é agendado num `requestAnimationFrame` (`renderQueued`, no `ChatMessage`), uma vez por
+quadro, porque reparsear a resposta inteira a cada pedacinho do stream seria trabalho
+jogado fora. O replay de uma conversa gravada passa pelo mesmo `appendAssistantDelta`, e
+por isso sai com markdown sem caminho próprio.
 
 #### O log é linear
 

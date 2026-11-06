@@ -131,6 +131,8 @@ export const ui = {
  * @property {'user' | 'assistant'} role
  * @property {string} text
  * @property {HTMLElement} bubble o no correspondente dentro de `#chat-log`
+ * @property {boolean} renderQueued ja ha um redesenho do markdown agendado para
+ *   o proximo quadro (so a do assistente usa)
  */
 
 /**
