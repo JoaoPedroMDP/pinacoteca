@@ -1,3 +1,14 @@
+## 0.16.0 (2026-11-06)
+
+### Feat
+
+- Comentários do board numa coluna ao lado da tela, ligados ao nó por linha
+- Prompt do agente pede todas as telas do sistema, interativas e sem rede
+
+### Fix
+
+- Badge de Shift+Enter fica no canto do Parar durante o turno
+
 ## 0.15.0 (2026-10-16)
 
 ### Feat
