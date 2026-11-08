@@ -676,8 +676,9 @@ Duas regras seguram essa divisão:
   `CHAT_UNDO_GROUP_MS`) porque o desfazer nativo do textarea brigaria com as trocas de
   texto que o histórico faz; grava o rascunho com um debounce de
   `CHAT_DRAFT_DEBOUNCE_MS`; e a seta pra cima percorre as mensagens já enviadas, mas só
-  quando o cursor está na ponta certa do texto, para não roubar a navegação de dentro do
-  campo.
+  a partir do compositor vazio, e só enquanto o texto é a mensagem recuperada, intacta —
+  digitar encerra a navegação. Fora disso as setas movem o cursor, e com Shift, Ctrl, Alt
+  ou Meta nunca puxam o histórico: são seleção e atalhos nativos do campo.
 
 #### A resposta do agente é markdown
 

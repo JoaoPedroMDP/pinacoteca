@@ -59,9 +59,6 @@ let lastEditAt = 0;
 /** Onde a seta pra cima parou no historico. -1 = nao esta navegando. */
 let historyIndex = -1;
 
-/** O que estava escrito quando a navegacao comecou, devolvido na volta. */
-let historyDraft = '';
-
 /* ---------- Compositor ---------- */
 
 /**
@@ -1038,16 +1035,6 @@ function interrupt() {
 
 /* ---------- Teclado ---------- */
 
-/** @returns {boolean} o cursor esta na primeira linha do compositor? */
-function atFirstLine() {
-  return !input.value.slice(0, input.selectionStart).includes('\n');
-}
-
-/** @returns {boolean} o cursor esta na ultima linha do compositor? */
-function atLastLine() {
-  return !input.value.slice(input.selectionEnd).includes('\n');
-}
-
 /**
  * Ctrl+Z desfaz, Ctrl+Shift+Z e Ctrl+Y refazem (Cmd no macOS). Sempre com
  * `preventDefault`, senao o desfazer nativo do textarea brigaria com a pilha
@@ -1091,18 +1078,21 @@ function handleEnter(event) {
 
 /**
  * Seta pra cima percorre o historico de tras pra frente; pra baixo volta e
- * devolve o rascunho que estava sendo escrito. So quando o cursor esta na
- * ponta certa do texto, para nao roubar a navegacao dentro do compositor.
+ * devolve o rascunho (vazio). A navegacao so comeca com o compositor vazio e
+ * so continua enquanto o texto e a mensagem recuperada, intacta — digitar
+ * zera `historyIndex` em `onInput`. Fora disso as setas movem o cursor. Com
+ * modificador (Shift, Ctrl, Alt, Meta) nunca: e selecao ou atalho nativo.
  * @param {KeyboardEvent} event
  */
 function handleHistoryKeys(event) {
+  if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+
   const history = loadChatHistory();
   if (history.length === 0) return;
 
   if (event.key === 'ArrowUp') {
-    if (!atFirstLine()) return;
     if (historyIndex === -1) {
-      historyDraft = input.value;
+      if (input.value !== '') return;
       historyIndex = history.length;
     }
     if (historyIndex === 0) return;
@@ -1113,13 +1103,13 @@ function handleHistoryKeys(event) {
     return;
   }
 
-  if (historyIndex === -1 || !atLastLine()) return;
+  if (historyIndex === -1) return;
 
   event.preventDefault();
   historyIndex += 1;
   if (historyIndex >= history.length) {
     historyIndex = -1;
-    commitValue(historyDraft);
+    commitValue('');
   } else {
     commitValue(history[historyIndex]);
   }

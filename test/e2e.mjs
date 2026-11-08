@@ -859,8 +859,17 @@ await press('z', { ctrlKey: true });
 check('Ctrl+Z devolve o texto anterior', (await composerValue()) === 'um');
 
 await clearComposer();
+await press('ArrowUp', { shiftKey: true });
+check('Shift+seta pra cima nao puxa o historico', (await composerValue()) === '');
 await press('ArrowUp');
-check('seta pra cima traz a ultima mensagem enviada', (await composerValue()) === 'mundo');
+check('seta pra cima com o compositor vazio traz a ultima mensagem enviada',
+  (await composerValue()) === 'mundo');
+await press('ArrowDown');
+check('seta pra baixo no fim do historico devolve o compositor vazio', (await composerValue()) === '');
+
+await type('texto meu');
+await press('ArrowUp');
+check('seta pra cima com texto no compositor nao troca o texto', (await composerValue()) === 'texto meu');
 
 await clearComposer();
 const spaceNotPanned = await board.evaluate(`(() => {
