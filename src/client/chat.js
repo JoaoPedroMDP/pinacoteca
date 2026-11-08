@@ -208,6 +208,15 @@ function keepPinned(mutate) {
 }
 
 /**
+ * Leva o log ao fim. Precisa rodar com o log ja visivel: o replay de uma
+ * conversa acontece com a subaba Chat escondida, onde `scrollHeight` da 0 e o
+ * `keepPinned` de cada bloco nao tem efeito — sem isto a conversa abria no topo.
+ */
+export function scrollChatToEnd() {
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+/**
  * @param {string} className
  * @param {string} [text] sempre por `textContent`: o conteudo vem do modelo e
  *   dos arquivos do usuario, nunca de uma fonte confiavel

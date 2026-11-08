@@ -1955,8 +1955,10 @@ await sendForReal('segunda conversa de verdade');
 await checkEventually('a segunda conversa entra na lista', async () => (
   (await conversationRows()).some((row) => row.title === 'segunda conversa de verdade')));
 
-// Voltar para a primeira nao pode misturar as duas.
+// Voltar para a primeira nao pode misturar as duas. O log fica baixo de
+// proposito, para transbordar e dar para ver onde a rolagem parou.
 await showSubtab('list');
+await board.evaluate("document.getElementById('chat-log').style.maxHeight = '40px'");
 await board.evaluate(
   `[...document.querySelectorAll('.chat-conversation')]
     .find((row) => row.dataset.id === ${JSON.stringify(firstId)})
@@ -1967,6 +1969,12 @@ await checkEventually('abrir outra conversa troca o log inteiro', async () => {
   return text.includes('primeira conversa de verdade') && !text.includes('segunda conversa de verdade');
 });
 check('e a subaba volta para o Chat', (await chatSubtab()) === 'chat');
+check('a conversa reaberta ja mostra o fim do log', await board.evaluate(`(() => {
+  const log = document.getElementById('chat-log');
+  return log.scrollHeight > log.clientHeight
+    && log.scrollHeight - log.scrollTop - log.clientHeight < 2;
+})()`));
+await board.evaluate("document.getElementById('chat-log').style.maxHeight = ''");
 
 // Turno em andamento: a lista fica olhavel e intocavel.
 await board.evaluate("import('/app/chat.js').then((m) => m.setTurnRunning(true))");

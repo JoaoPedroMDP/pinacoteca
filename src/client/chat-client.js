@@ -12,7 +12,7 @@
 import {
   appendChatError, appendAssistantDelta, appendPermissionRequest, appendQuestionRequest,
   appendThinkingDelta, appendToolUse, appendUserMessage, applyServerConfig, closeQuestion,
-  expirePermission, markPermission, resetChatLog, setAutoApprove, setSessionId,
+  expirePermission, markPermission, resetChatLog, scrollChatToEnd, setAutoApprove, setSessionId,
   setTransport, setTurnRunning, updateToolResult,
 } from './chat.js';
 import { renderConversations } from './conversations.js';
@@ -522,6 +522,7 @@ async function openConversation(id, { quiet = false } = {}) {
   replay(Array.isArray(body.events) ? /** @type {RawEvent[]} */ (body.events) : []);
   openHere(asText(body.sessionId) || id);
   showTab('chat', 'chat');
+  scrollChatToEnd();
   return true;
 }
 

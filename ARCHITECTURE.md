@@ -225,6 +225,10 @@ servidor, e o pedido que ficou sem resposta volta **expirado** — visível, sem
 porque a promessa que o esperava morreu com o turno. Pedido que *teve* resposta volta
 aprovado, rejeitado ou respondido, e é para isso que o `permission-result` é gravado.
 
+A conversa reaberta já aparece no fim, como estava quando foi deixada. O replay roda com
+a subaba Chat escondida, onde o log não tem altura, então rolar a cada bloco não adianta:
+`openConversation` chama `scrollChatToEnd` depois de mostrar a subaba.
+
 Limites aceitos:
 
 - **Reload no meio de um turno**: o turno continua no servidor e continua sendo gravado,
