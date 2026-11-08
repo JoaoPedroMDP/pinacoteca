@@ -264,24 +264,46 @@ export function resolveXPath(doc, xpath) {
 }
 
 /**
- * Serializa os itens referenciados da fila de comentários numa única
- * mensagem, numerada, com o XPath em linha própria (fácil de copiar/usar
- * pelo agente) e o comentário em bloco abaixo (suporta multi-linha sem
- * ambiguidade). Itens `unreferenced` ficam de fora: no momento do envio,
- * quem ainda não resolveu o nó é descartado da mensagem.
+ * Caminho absoluto de uma tela: a raiz observada mais o caminho relativo (que
+ * vem sempre com `/`). O separador segue o da raiz, para uma raiz do Windows
+ * (`C:\protos`) não virar um caminho misto.
+ *
+ * @param {string} root raiz observada, absoluta
+ * @param {string} file caminho relativo à raiz, com `/`
+ * @returns {string}
+ */
+export function absoluteScreenPath(root, file) {
+  if (!root) return file;
+  const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+  const base = root.replace(/[\\/]+$/, '');
+  return `${base}${sep}${file.split('/').join(sep)}`;
+}
+
+/**
+ * Serializa os itens confirmados da fila de comentários numa única mensagem,
+ * numerada: o caminho absoluto do arquivo e o XPath em linhas próprias (o
+ * mesmo XPath pode existir em mais de uma tela, então só os dois juntos
+ * apontam um nó) e o comentário em bloco abaixo (suporta multi-linha sem
+ * ambiguidade). Ficam de fora os `unreferenced` — quem ainda não resolveu o nó
+ * no momento do envio — e os `draft`, que ainda não foram confirmados com Enter.
  *
  * @param {Map<string, Map<string, import('./state.js').CommentItem>>} queue
+ * @param {string} root raiz observada, absoluta
  * @returns {string} vazio quando não há item elegível
  */
-export function serializeCommentQueue(queue) {
+export function serializeCommentQueue(queue, root) {
   const lines = [];
   let n = 0;
 
-  for (const items of queue.values()) {
+  for (const [file, items] of queue) {
     for (const item of items.values()) {
-      if (item.status === 'unreferenced') continue;
+      if (item.status === 'unreferenced' || item.status === 'draft') continue;
       n += 1;
-      lines.push(`${n}. XPath: ${item.xpath}\n   Comentário: ${item.text}`);
+      lines.push(
+        `${n}. Arquivo: ${absoluteScreenPath(root, file)}\n`
+        + `   XPath: ${item.xpath}\n`
+        + `   Comentário: ${item.text}`,
+      );
     }
   }
 

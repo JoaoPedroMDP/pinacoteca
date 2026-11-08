@@ -133,8 +133,9 @@ ganha arquivo —, a tela é interativa de verdade (dropdown abre, input aceita
 texto, botão responde), nada de chamada de rede (dados mockados no arquivo, resposta
 simulada), o board recarrega a cada gravação, o protótipo é autocontido (CSS e JS inline,
 sem build, sem dependência externa), toda edição passa por aprovação, e os comentários
-apontados no board chegam como lista de `XPath:` +
-`Comentário:` (o formato de `serializeCommentQueue`). Mudar esse formato pede mudar o
+apontados no board chegam como lista de `Arquivo:` (caminho absoluto) + `XPath:` +
+`Comentário:` (o formato de `serializeCommentQueue`) — o arquivo vai junto porque o mesmo
+XPath se repete entre telas. Mudar esse formato pede mudar o
 prompt junto.
 
 O `snapshot: true` grava o prompt na sessão: um `resume` reusa exatamente o mesmo, o que
@@ -1150,10 +1151,15 @@ para um novo elemento reinicia o nível em 0.
 #### Fila de comentários endereçados à IA
 
 No modo ponteiro, clicar num nó sem nenhum modificador abre uma caixinha de comentário
-multi-linha ancorada nele — o `pointerdown` do pan chama `openCommentBoxAt` em vez de
-seguir para o `click` do escudo. Enter (sem Shift) confirma: a caixinha fecha e vira um
-balão; Shift+Enter só quebra linha. Reclicar um nó que já tem balão reabre a
-caixinha pré-preenchida, editando o mesmo item — a chave é o XPath do nó dentro do
+multi-linha — o `pointerdown` do pan chama `openCommentBoxAt` em vez de
+seguir para o `click` do escudo. O item nasce `draft`, e a caixinha dele abre **no ponto do
+clique**, em cima do que foi apontado: numa camada própria do layer
+(`.pina-comment-drafts`), posicionada pelo ponto guardado em `draftPoints` (`inspect.js`,
+estado de apresentação, fora do item) e contra-escalada como a coluna. Enter (sem Shift)
+confirma: a caixinha fecha e vira um balão **na coluna** ao lado da tela; Shift+Enter só
+quebra linha. Rascunho não aparece na coluna, nem na lista "a enviar" do chat, nem entra no
+envio — só o Enter o põe na fila de verdade. Reclicar um nó que já tem balão reabre a
+caixinha pré-preenchida, na própria coluna, editando o mesmo item — a chave é o XPath do nó dentro do
 arquivo, então não há como duplicar item no mesmo lugar. Clicar fora da caixinha aberta
 não a fecha nem descarta o rascunho: só o Enter (confirma) ou o badge "x" (remove)
 mudam o item.
@@ -1167,14 +1173,16 @@ fila, então o redesenho acontece a cada tecla; e tirar o `<textarea>` do DOM no
 tira junto o foco e **cancela a composição do teclado** — uma tecla morta de acento (`´`
 seguido de `a`) nunca fechava em `á`, e o cursor ainda voltava para o fim. Por isso a
 caixinha aberta é guardada por chave e reaproveitada (`mountedBoxes`): ela só é
-mantida no lugar, nunca reconstruída nem movida: a coluna remove apenas os nós que saíram da
-fila e insere os balões recriados antes ou depois dela, na ordem da fila. Uma caixinha
+mantida no lugar, nunca reconstruída nem movida: a coluna (e a camada de rascunhos, pela
+mesma `syncChildren`) remove apenas os nós que saíram da fila e insere os balões recriados
+antes ou depois dela, na ordem da fila. Um rascunho nunca troca de container com a caixinha
+aberta: ele só sai da camada de rascunhos ao ser confirmado, e confirmar já a fecha. Uma caixinha
 que saiu da tela fica desconectada do documento, e é esse o sinal de que o nó guardado não
 vale mais.
 
-**Balões e caixinhas não ficam sobre o nó, ficam numa coluna ao lado da tela**
+**Balões confirmados não ficam sobre o nó, ficam numa coluna ao lado da tela**
 (`.pina-comment-rail`), empilhados na ordem da fila, e uma linha (`<svg>` no mesmo layer)
-liga cada um ao seu nó. A posição do nó não é guardada no item: um retrato tirado no clique
+liga cada um ao seu nó. O rascunho flutuante não tem linha: ele já está em cima do nó. A posição do nó não é guardada no item: um retrato tirado no clique
 ficava para trás assim que o protótipo rolava por dentro. Em vez disso `refreshLinks` mede
 o elemento vivo a cada desenho — `anchoredEls` guarda o `Element` de cada item, e
 `anchoredElement` o resolve de novo pelo XPath quando o guardado ficou para trás. O desenho
@@ -1212,10 +1220,14 @@ O
 painel de chat espelha a fila numa lista "a enviar" (`chat.js`), com o mesmo botão "x" por
 item; removê-lo em qualquer um dos dois lados chama o mesmo `removeCommentItem` e some dos
 dois. Ao apertar Enviar com algo na fila, `serializeCommentQueue` (`utils.js`, função pura)
-numera XPath e comentário de cada item numa única mensagem, que vai concatenada com o texto
-do compositor (fila primeiro) numa única chamada a `chat.transport.send`. A partir daí a
+numera arquivo, XPath e comentário de cada item confirmado numa única mensagem, que vai
+concatenada com o texto do compositor (fila primeiro) numa única chamada a
+`chat.transport.send`. O arquivo vai como caminho absoluto (`absoluteScreenPath` junta
+`source.root` com o caminho relativo, no separador da raiz): o mesmo XPath — um
+`/html[1]/body[1]/button[1]` — existe em várias telas, e só o par aponta um nó. A partir daí a
 fila entra em `sending`: os balões mostram carregamento e perdem o "x" até `chat.running`
-voltar a `false`, quando o turno termina e eles somem da fila.
+voltar a `false`, quando o turno termina e eles somem da fila. Rascunhos abertos no momento do
+envio ficam de fora e continuam abertos no board.
 
 Se o iframe recarrega com itens pendentes, o `load` de `cards.js` chama `tryReanchor`, que
 tenta `resolveXPath` (inverso de `computeXPath`, em `utils.js`) no documento novo para cada

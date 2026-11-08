@@ -1854,6 +1854,27 @@ body {
   display: none;
 }
 
+/*
+ * Rascunhos: a caixinha de um comentario recem-aberto fica no ponto do clique,
+ * em cima do que foi apontado, e so vai para a coluna no Enter. A camada cobre
+ * o frame sem pegar o ponteiro; cada caixinha e posicionada por `left`/`top`
+ * (espaco interno do iframe) e contra-escalada a partir desse canto, para
+ * continuar legivel no zoom afastado.
+ */
+.pina-comment-drafts {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pina-comment-drafts > .pina-comment-box {
+  position: absolute;
+  max-width: none;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 45%);
+  transform: scale(var(--inv-scale, 1));
+  transform-origin: 0 0;
+}
+
 .pina-comment-balloon,
 .pina-comment-box {
   display: flex;

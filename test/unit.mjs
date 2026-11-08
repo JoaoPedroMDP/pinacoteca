@@ -31,7 +31,7 @@ import {
   saveChatDraft, saveOpenConversation, loadFolders, saveFolders,
 } from '../src/client/storage.js';
 import {
-  assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
+  absoluteScreenPath, assignColumns, buildTree, clamp, computeXPath, encodePath, findOverlaps,
   clampSidebarWidth, normalizeQuestions, previewUrl, rectsOverlap, resizeZoneAt,
   resolveXPath, separateOverlaps, serializeCommentQueue, snapToGrid, sortNames,
   toolTarget, basenameOf, dirnameOf, folderColor, hexToHsl, hslToHex, relocatePath,
@@ -1246,29 +1246,50 @@ function queueOf(rows) {
   return queue;
 }
 
-test('serializeCommentQueue numera XPath e comentario por item', () => {
+test('serializeCommentQueue numera arquivo, XPath e comentario por item', () => {
   const queue = queueOf([
     ['a.html', '/html[1]/body[1]/button[1]', 'ajusta a cor desse botao pra verde', 'confirmed'],
-    ['a.html', '//*[@id="card-principal"]', 'aumenta o espacamento em baixo', 'draft'],
+    ['sub/b.html', '/html[1]/body[1]/button[1]', 'aumenta o espacamento em baixo', 'sending'],
   ]);
   assert.equal(
-    serializeCommentQueue(queue),
-    '1. XPath: /html[1]/body[1]/button[1]\n   Comentário: ajusta a cor desse botao pra verde'
-    + '\n\n2. XPath: //*[@id="card-principal"]\n   Comentário: aumenta o espacamento em baixo',
+    serializeCommentQueue(queue, '/home/u/protos'),
+    '1. Arquivo: /home/u/protos/a.html\n   XPath: /html[1]/body[1]/button[1]'
+    + '\n   Comentário: ajusta a cor desse botao pra verde'
+    + '\n\n2. Arquivo: /home/u/protos/sub/b.html\n   XPath: /html[1]/body[1]/button[1]'
+    + '\n   Comentário: aumenta o espacamento em baixo',
   );
 });
 
-test('serializeCommentQueue descarta itens sem referencia', () => {
+test('serializeCommentQueue descarta itens sem referencia e rascunhos', () => {
   const queue = queueOf([
     ['a.html', '//*[@id="sumiu"]', 'texto perdido', 'unreferenced'],
+    ['a.html', '//*[@id="rascunho"]', 'ainda digitando', 'draft'],
     ['a.html', '//*[@id="fica"]', 'texto valido', 'confirmed'],
   ]);
-  assert.equal(serializeCommentQueue(queue), '1. XPath: //*[@id="fica"]\n   Comentário: texto valido');
+  assert.equal(
+    serializeCommentQueue(queue, '/r'),
+    '1. Arquivo: /r/a.html\n   XPath: //*[@id="fica"]\n   Comentário: texto valido',
+  );
 });
 
 test('serializeCommentQueue devolve vazio sem item elegivel', () => {
-  assert.equal(serializeCommentQueue(new Map()), '');
-  assert.equal(serializeCommentQueue(queueOf([['a.html', '//*[@id="x"]', 'sumiu', 'unreferenced']])), '');
+  assert.equal(serializeCommentQueue(new Map(), '/r'), '');
+  assert.equal(serializeCommentQueue(queueOf([['a.html', '//*[@id="x"]', 'sumiu', 'unreferenced']]), '/r'), '');
+  assert.equal(serializeCommentQueue(queueOf([['a.html', '//*[@id="x"]', 'meio', 'draft']]), '/r'), '');
+});
+
+test('absoluteScreenPath junta raiz e caminho relativo', () => {
+  assert.equal(absoluteScreenPath('/home/u/protos', 'sub/a.html'), '/home/u/protos/sub/a.html');
+  assert.equal(absoluteScreenPath('/home/u/protos/', 'a.html'), '/home/u/protos/a.html');
+});
+
+test('absoluteScreenPath segue o separador de uma raiz do Windows', () => {
+  assert.equal(absoluteScreenPath('C:\\protos', 'sub/a.html'), 'C:\\protos\\sub\\a.html');
+  assert.equal(absoluteScreenPath('C:\\protos\\', 'a.html'), 'C:\\protos\\a.html');
+});
+
+test('absoluteScreenPath sem raiz devolve o relativo', () => {
+  assert.equal(absoluteScreenPath('', 'a.html'), 'a.html');
 });
 
 test('normalizeQuestions aceita a pergunta completa', () => {

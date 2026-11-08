@@ -19,7 +19,7 @@ import {
   chatLog, chatModel, chatQueue, chatQueueList, chatSend, chatSendMode, chatStop,
 } from './dom.js';
 import {
-  chat, commentQueue, notifyQueueChange, onQueueChange,
+  chat, commentQueue, notifyQueueChange, onQueueChange, source,
 } from './state.js';
 import { removeCommentItem } from './inspect.js';
 import {
@@ -907,7 +907,8 @@ export function applyServerConfig(config) {
 /* ---------- Fila de comentarios ---------- */
 //
 // Espelha `commentQueue` (state.js) numa lista "a enviar": cada linha e um
-// item da fila, incluindo rascunhos ainda abertos no board, com "x" removivel
+// item da fila ja confirmado com Enter — rascunho aberto no board ainda nao
+// entra, nem aqui nem no envio —, com "x" removivel
 // que chama o mesmo removedor do balao (`inspect.js`). Nenhuma copia propria —
 // redesenha inteira a cada `onQueueChange`, como o board faz do lado dele.
 
@@ -947,6 +948,7 @@ function renderQueueList() {
   let count = 0;
   for (const [file, items] of commentQueue) {
     for (const item of items.values()) {
+      if (item.status === 'draft') continue;
       count += 1;
       chatQueueList.append(buildQueueRow(file, item));
     }
@@ -958,15 +960,17 @@ function renderQueueList() {
 onQueueChange(renderQueueList);
 
 /**
- * Move todo item referenciado para `sending` (trava edicao/remocao ate o
+ * Move todo item confirmado para `sending` (trava edicao/remocao ate o
  * turno terminar) e descarta os itens `unreferenced` — quem ainda nao
  * resolveu o no no momento do envio fica de fora da mensagem e sai da fila.
+ * Rascunhos (`draft`) nao foram na mensagem e ficam abertos no board.
  */
 function lockQueueForSending() {
   let changed = false;
 
   for (const [file, items] of commentQueue) {
     for (const [xpath, item] of items) {
+      if (item.status === 'draft') continue;
       if (item.status === 'unreferenced') {
         items.delete(xpath);
       } else {
@@ -1000,7 +1004,7 @@ function sweepSentQueue() {
 
 function submit() {
   const text = input.value.trim();
-  const queueMessage = serializeCommentQueue(commentQueue);
+  const queueMessage = serializeCommentQueue(commentQueue, source.root);
   if (!text && !queueMessage) return;
 
   // A fila vai primeiro, o texto livre do compositor depois — os dois se

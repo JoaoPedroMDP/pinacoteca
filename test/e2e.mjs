@@ -1178,6 +1178,9 @@ const balloonCount = () => board.evaluate("document.querySelectorAll('.pina-comm
 const sendingBalloonCount = () => board.evaluate("document.querySelectorAll('.pina-comment-balloon.is-sending').length");
 const queueListText = () => board.evaluate("document.getElementById('chat-queue-list').textContent");
 const queueHidden = () => board.evaluate("document.getElementById('chat-queue').hidden");
+/** @param {string} file */
+const cardOf = (file) => `[...document.querySelectorAll('.card')]
+  .find((c) => c.querySelector('iframe').src.includes(${JSON.stringify(file)}))`;
 
 /** @param {string} text */
 const typeInBox = (text) => board.evaluate(`(() => {
@@ -1199,6 +1202,25 @@ await board.evaluate("document.querySelector('[data-action=\"toggle-mode\"]').cl
 await board.evaluate(gestureOn('login.html', "PointerEvent('pointerdown'", 'button: 0,'));
 await checkEventually('clique simples em modo ponteiro abre a caixinha', async () => (await commentBoxTextarea()) === '');
 
+// O rascunho abre onde se clicou, nao na coluna: `gestureOn` clica no meio da
+// largura do escudo, 12px abaixo do topo, e o canto da caixinha fica ali.
+const draftPlacement = await board.evaluate(`(() => {
+  const card = ${cardOf('login.html')};
+  const shield = card.querySelector('.card-shield').getBoundingClientRect();
+  const box = document.querySelector('.pina-comment-box');
+  const rect = box.getBoundingClientRect();
+  return {
+    inDrafts: box.parentElement.classList.contains('pina-comment-drafts'),
+    railItems: card.querySelector('.pina-comment-rail').childElementCount,
+    dx: Math.abs(rect.left - (shield.left + shield.width / 2)),
+    dy: Math.abs(rect.top - (shield.top + 12)),
+  };
+})()`);
+check('o rascunho fica fora da coluna, na camada de rascunhos',
+  draftPlacement.inDrafts && draftPlacement.railItems === 0, JSON.stringify(draftPlacement));
+check('a caixinha do rascunho abre no ponto do clique',
+  draftPlacement.dx <= 2 && draftPlacement.dy <= 2, JSON.stringify(draftPlacement));
+
 // Digitar muta o item e redesenha a fila inteira. Se o redesenho remontasse o
 // `<textarea>`, a composicao de uma tecla morta (`\u00b4` seguido de `a`) seria
 // cancelada no meio e o acento nunca fecharia em `\u00e1` — o no precisa ser o
@@ -1210,8 +1232,7 @@ await board.evaluate(`(() => {
 })()`);
 
 await typeInBox('linha 1');
-await checkEventually('a lista "a enviar" acompanha o rascunho ao vivo',
-  async () => (await queueListText()).includes('linha 1'));
+check('o rascunho nao entra na lista "a enviar" antes do Enter', await queueHidden());
 
 check('digitar nao remonta a caixinha: o mesmo textarea continua na tela',
   (await board.evaluate("document.querySelector('.pina-comment-box textarea')?.dataset.marca ?? null")) === 'antes');
@@ -1225,6 +1246,10 @@ await typeInBox('linha 1\nlinha 2 — ajusta a cor pra verde');
 await pressInBox();
 await checkEventually('Enter (sem Shift) confirma e mostra o balao', async () => (await balloonCount()) === 1);
 check('a caixinha fecha ao confirmar', (await commentBoxTextarea()) === null);
+check('o balao confirmado vai para a coluna',
+  await board.evaluate(`${cardOf('login.html')}.querySelector('.pina-comment-rail > .pina-comment-balloon') !== null`));
+await checkEventually('e so agora entra na lista "a enviar"',
+  async () => (await queueListText()).includes('linha 2'));
 
 await board.evaluate(gestureOn('login.html', "PointerEvent('pointerdown'", 'button: 0,'));
 await checkEventually('reclicar o no ja comentado reabre a caixinha com o texto salvo',
@@ -1261,9 +1286,6 @@ await board.evaluate("document.querySelector('.pina-comment-box .pina-comment-re
 
 process.stdout.write('\nColuna de comentarios e linhas\n');
 
-/** @param {string} file */
-const cardOf = (file) => `[...document.querySelectorAll('.card')]
-  .find((c) => c.querySelector('iframe').src.includes(${JSON.stringify(file)}))`;
 const loginLinkDotY = () => board.evaluate(
   `Number(${cardOf('login.html')}.querySelector('.pina-comment-link-dot')?.getAttribute('cy') ?? NaN)`,
 );
@@ -1415,14 +1437,27 @@ await typeInBox('envia isso');
 await pressInBox();
 await checkEventually('item confirmado em solo.html, pronto para o envio', async () => (await balloonCount()) === 1);
 
+// Um rascunho aberto noutra tela na hora do envio: nao vai na mensagem.
+await board.evaluate(gestureOn('login.html', "PointerEvent('pointerdown'", 'button: 0,'));
+await checkEventually('rascunho aberto em login.html', async () => (await commentBoxTextarea()) === '');
+await typeInBox('rascunho fora');
+
 await board.evaluate("document.querySelector('[data-tab=\"chat\"]').click()");
 await board.evaluate("document.getElementById('chat-send').click()");
 
-await checkEventually('enviar serializa XPath e comentario numa unica mensagem', async () => {
+await checkEventually('enviar serializa arquivo, XPath e comentario numa unica mensagem', async () => {
   const texts = await board.evaluate('window.__sentTexts');
   return Array.isArray(texts) && texts.length === 1
-    && texts[0].startsWith('1. XPath:') && texts[0].includes('envia isso');
+    && texts[0].startsWith('1. Arquivo: ') && texts[0].includes('\n   XPath: ')
+    && texts[0].includes('envia isso');
 });
+check('o arquivo vai com o caminho absoluto da raiz observada', await board.evaluate(`(async () => {
+  const { source } = await import('/app/state.js');
+  return window.__sentTexts[0].startsWith('1. Arquivo: ' + source.root.replace(/[\\\\/]+$/, '') + '/solo.html');
+})()`));
+check('o rascunho nao confirmado fica fora da mensagem',
+  !(await board.evaluate('window.__sentTexts[0]')).includes('rascunho fora'));
+check('e continua aberto no board', (await commentBoxTextarea()) === 'rascunho fora');
 
 check('o balao entra em carregamento ao enviar', (await sendingBalloonCount()) === 1);
 check('a fila trava: balao em carregamento perde o "x"',
@@ -1431,6 +1466,8 @@ check('a fila trava: balao em carregamento perde o "x"',
 await board.evaluate("import('/app/chat.js').then((m) => m.setTurnRunning(false))");
 await checkEventually('turno terminado remove o balao em carregamento', async () => (await balloonCount()) === 0);
 check('e some da lista "a enviar"', await queueHidden());
+check('o rascunho sobrevive ao fim do turno', (await commentBoxTextarea()) === 'rascunho fora');
+await board.evaluate("document.querySelector('.pina-comment-box .pina-comment-remove').click()");
 
 /* ---------- Perguntas do agente ---------- */
 

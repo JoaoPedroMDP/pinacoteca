@@ -115,9 +115,10 @@ dependencies.
 - Every file edit goes through the user's approval, and you can only write inside the \
 working directory.
 - The user can point at elements on the board. Those references arrive as a numbered \
-list of "XPath: ..." lines, each followed by a "Comentário: ..." with what to change in \
-that element. Locate the element by its XPath in the prototype the user is talking about; \
-if it is not clear which file it is, check which one matches or ask.`;
+list where each item has an "Arquivo: ..." line with the absolute path of the screen, an \
+"XPath: ..." line and a "Comentário: ..." with what to change in that element. The same \
+XPath can exist in several screens, so the XPath is only valid inside the file named on \
+its own item: open that file and locate the element there.`;
 
 /** @type {Map<string, Session>} */
 const sessions = new Map();

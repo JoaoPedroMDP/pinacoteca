@@ -274,6 +274,15 @@ const mountedBoxes = new Map();
 const boxKey = (file, xpath) => `${file} ${xpath}`;
 
 /**
+ * Onde a caixinha de cada rascunho (`draft`) abre: o ponto do clique, no espaco
+ * do layer (que e o espaco interno do iframe, veja `ensureQueueLayer`). O
+ * rascunho fica ali, em cima do que foi apontado, e so entra na coluna depois
+ * do Enter. Estado de apresentacao, como `openBoxKeys` — nao vai no item.
+ * @type {Map<string, { x: number, y: number }>}
+ */
+const draftPoints = new Map();
+
+/**
  * O no do prototipo de cada item, pela mesma chave de `openBoxKeys`. E so
  * cache: a verdade e o XPath, e `anchoredElement` resolve de novo quando o no
  * guardado ficou para tras (iframe recarregou, no saiu do documento).
@@ -309,8 +318,10 @@ function anchoredElement(file, item) {
 
 /**
  * Clique simples em modo ponteiro: abre a caixinha de comentario multi-linha
- * para o no sob o cursor. Reclicar um no que ja tem item na fila reabre a
- * caixinha pre-preenchida, editando o mesmo item em vez de criar outro.
+ * para o no sob o cursor. Um item novo nasce `draft` e a caixinha abre no
+ * ponto do clique; so o Enter a leva para a coluna. Reclicar um no que ja tem
+ * item na fila reabre a caixinha pre-preenchida, editando o mesmo item em vez
+ * de criar outro.
  * @param {string} file
  * @param {MouseEvent | PointerEvent} event
  */
@@ -322,6 +333,7 @@ export function openCommentBoxAt(file, event) {
   if (!found) return;
 
   const xpath = computeXPath(found.el);
+  const key = boxKey(file, xpath);
 
   let items = commentQueue.get(file);
   if (!items) {
@@ -335,14 +347,24 @@ export function openCommentBoxAt(file, event) {
     items.set(xpath, item);
   }
 
-  anchoredEls.set(boxKey(file, xpath), found.el);
-  openBoxKeys.add(boxKey(file, xpath));
+  // So o primeiro clique fixa o ponto: reclicar o mesmo rascunho nao o arrasta.
+  if (items.get(xpath)?.status === 'draft' && !draftPoints.has(key)) {
+    const rect = screen.iframe.getBoundingClientRect();
+    draftPoints.set(key, {
+      x: clamp((event.clientX - rect.left) / view.scale, 0, screen.frame.clientWidth),
+      y: clamp((event.clientY - rect.top) / view.scale, 0, screen.frame.clientHeight),
+    });
+  }
+
+  anchoredEls.set(key, found.el);
+  openBoxKeys.add(key);
   notifyQueueChange();
 }
 
 /**
  * Enter (sem Shift) dentro da caixinha: confirma o item (`draft` -> `confirmed`,
- * ou permanece `confirmed` se ja era) e fecha a caixinha, mostrando o balao.
+ * ou permanece `confirmed` se ja era) e fecha a caixinha, mostrando o balao na
+ * coluna — e so a partir daqui ele entra na lista "a enviar" e no envio.
  * @param {string} file
  * @param {string} xpath
  */
@@ -352,6 +374,7 @@ function confirmCommentItem(file, xpath) {
 
   item.status = 'confirmed';
   openBoxKeys.delete(boxKey(file, xpath));
+  draftPoints.delete(boxKey(file, xpath));
   notifyQueueChange();
 }
 
@@ -371,6 +394,7 @@ export function removeCommentItem(file, xpath) {
   if (items.size === 0) commentQueue.delete(file);
   openBoxKeys.delete(boxKey(file, xpath));
   anchoredEls.delete(boxKey(file, xpath));
+  draftPoints.delete(boxKey(file, xpath));
   notifyQueueChange();
 }
 
@@ -399,6 +423,7 @@ export function tryReanchor(file, doc) {
       item.status = 'unreferenced';
       openBoxKeys.delete(key);
       anchoredEls.delete(key);
+      draftPoints.delete(key);
     }
   }
 
@@ -453,10 +478,11 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
  * e e por isso que coordenada do layer e coordenada interna do iframe sao o
  * mesmo espaco.
  *
- * Dentro dela: o `<svg>` das linhas, cobrindo o frame, e a coluna com baloes e
- * caixinhas empilhados, ao lado dele.
+ * Dentro dela: o `<svg>` das linhas, cobrindo o frame, a coluna com baloes e
+ * caixinhas empilhados, ao lado dele, e a camada dos rascunhos, cujas
+ * caixinhas ficam no ponto onde o usuario clicou.
  * @param {Screen} screen
- * @returns {{ layer: HTMLElement, links: SVGSVGElement, rail: HTMLElement }}
+ * @returns {{ layer: HTMLElement, links: SVGSVGElement, rail: HTMLElement, drafts: HTMLElement }}
  */
 function ensureQueueLayer(screen) {
   let layer = /** @type {HTMLElement | null} */ (screen.card.querySelector(':scope > .pina-queue-layer'));
@@ -476,13 +502,17 @@ function ensureQueueLayer(screen) {
     });
     rail.addEventListener('scroll', () => scheduleCommentLinks(screen.file));
 
-    layer.append(links, rail);
+    const drafts = document.createElement('div');
+    drafts.className = 'pina-comment-drafts';
+
+    layer.append(links, rail, drafts);
     screen.card.append(layer);
   }
   return {
     layer,
     links: /** @type {SVGSVGElement} */ (layer.querySelector(':scope > .pina-comment-links')),
     rail: /** @type {HTMLElement} */ (layer.querySelector(':scope > .pina-comment-rail')),
+    drafts: /** @type {HTMLElement} */ (layer.querySelector(':scope > .pina-comment-drafts')),
   };
 }
 
@@ -515,7 +545,8 @@ function makeRemoveBadge(onRemove) {
  */
 function revealInRail(node) {
   const rail = node.parentElement;
-  if (!rail) return;
+  // Rascunho flutuante nao esta na coluna: nao ha o que rolar.
+  if (!rail?.classList.contains('pina-comment-rail')) return;
 
   const top = node.offsetTop;
   const bottom = top + node.offsetHeight;
@@ -616,14 +647,35 @@ function commentBoxFor(key, file, item) {
 }
 
 /**
- * Redesenha a coluna de uma tela a partir da fila, na ordem da fila. Itens
- * `unreferenced` ficam de fora — eles vao para a bandeja
- * (`renderUnreferencedTray`), nao pro card.
+ * Poe em `container` exatamente `nodes`, nessa ordem, sem tirar do DOM quem ja
+ * esta na posicao certa. So os nos que **sairam** sao removidos, e os outros
+ * entram antes ou depois da caixinha aberta sem que ela saia do lugar. Trocar
+ * tudo — ou mover a caixinha — tiraria ela do DOM, e com ela o foco e a
+ * composicao do teclado.
+ * @param {HTMLElement} container
+ * @param {HTMLElement[]} nodes
+ */
+function syncChildren(container, nodes) {
+  /** @type {Set<Element>} */
+  const kept = new Set(nodes);
+  for (const child of [...container.children]) {
+    if (!kept.has(child)) child.remove();
+  }
+  nodes.forEach((node, index) => {
+    const current = container.children[index] ?? null;
+    if (current !== node) container.insertBefore(node, current);
+  });
+}
+
+/**
+ * Redesenha os comentarios de uma tela a partir da fila, na ordem da fila.
+ * Rascunhos (`draft`) vao para a camada de rascunhos, cada caixinha no ponto
+ * do clique (`draftPoints`); os demais vao para a coluna. Itens `unreferenced`
+ * ficam de fora — eles vao para a bandeja (`renderUnreferencedTray`), nao pro
+ * card.
  *
- * A coluna nao e esvaziada de uma vez: so os nos que **sairam** da fila sao
- * removidos, e os outros entram antes ou depois da caixinha aberta sem que ela
- * saia do lugar. Trocar tudo — ou mover a caixinha — tiraria ela do DOM, e com
- * ela o foco e a composicao do teclado.
+ * Um rascunho nunca muda de container com a caixinha aberta: ele so sai da
+ * camada de rascunhos ao ser confirmado, e a confirmacao ja fecha a caixinha.
  *
  * @param {string} file
  */
@@ -631,30 +683,32 @@ function renderQueueForFile(file) {
   const screen = screens.get(file);
   if (!screen) return;
 
-  const { rail } = ensureQueueLayer(screen);
+  const { rail, drafts } = ensureQueueLayer(screen);
   rail.classList.toggle('is-left', commentRailSide.get(file) === 'left');
 
   /** @type {HTMLElement[]} */
-  const nodes = [];
+  const railNodes = [];
+  /** @type {HTMLElement[]} */
+  const draftNodes = [];
   for (const item of commentQueue.get(file)?.values() ?? []) {
     if (item.status === 'unreferenced') continue;
 
     const key = boxKey(file, item.xpath);
+    if (item.status === 'draft') {
+      const box = commentBoxFor(key, file, item);
+      const point = draftPoints.get(key) ?? { x: 0, y: 0 };
+      box.style.left = `${point.x}px`;
+      box.style.top = `${point.y}px`;
+      draftNodes.push(box);
+      continue;
+    }
+
     const boxOpen = item.status !== 'sending' && openBoxKeys.has(key);
-    nodes.push(boxOpen ? commentBoxFor(key, file, item) : buildBalloon(file, item));
+    railNodes.push(boxOpen ? commentBoxFor(key, file, item) : buildBalloon(file, item));
   }
 
-  /** @type {Set<Element>} */
-  const kept = new Set(nodes);
-  for (const child of [...rail.children]) {
-    if (!kept.has(child)) child.remove();
-  }
-  // So os baloes recem-criados entram aqui: quem ja esta na posicao certa (a
-  // caixinha aberta) e pulado, e o `insertBefore` dos outros nao a move.
-  nodes.forEach((node, index) => {
-    const current = rail.children[index] ?? null;
-    if (current !== node) rail.insertBefore(node, current);
-  });
+  syncChildren(rail, railNodes);
+  syncChildren(drafts, draftNodes);
 
   refreshLinks(file);
 }
