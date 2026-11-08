@@ -126,8 +126,8 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   normal e destaca o elemento sob ele.
  * - `interactiveFile`: a unica tela que esta recebendo cliques do usuario
  *   (duplo clique libera; `Esc` ou clique fora devolve o controle ao board).
- * - `openSizeMenuFile`: a unica tela com o menu de tamanho aberto. Um por vez,
- *   pelo mesmo motivo de `interactiveFile`.
+ * - `openCardMenuFile`: a unica tela com o menu de opcoes (redimensionar,
+ *   recarregar) aberto. Um por vez, pelo mesmo motivo de `interactiveFile`.
  * - `globalSize`: o tamanho escolhido no menu da toolbar, que vale para *todas*
  *   as telas — inclusive as que entrarem depois, veja `createCard`. `null` e o
  *   "Automatico": nao e um tamanho, e a ausencia de tamanho fixo, entao guardar
@@ -136,7 +136,7 @@ export const view = { scale: 1, x: 0, y: 0 };
  *   a sessao, e o que ela produziu — o tamanho de cada tela — ja persiste no
  *   registro de posicoes.
  * - `globalSizeMenuOpen`: o menu da toolbar esta aberto. Separado de
- *   `openSizeMenuFile` porque nao e de tela nenhuma.
+ *   `openCardMenuFile` porque nao e de tela nenhuma.
  * - `openFolderMenu`: a pasta com o menu aberto no nome dela, no board. Um por
  *   vez, como o de tamanho.
  * - `snapToGrid`: liga o alinhamento a grade no arrasto de tela. Carregado do
@@ -153,7 +153,7 @@ export const view = { scale: 1, x: 0, y: 0 };
  * @type {{
  *   mode: 'pan' | 'pointer',
  *   interactiveFile: string | null,
- *   openSizeMenuFile: string | null,
+ *   openCardMenuFile: string | null,
  *   globalSize: { label: string, width: number, height: number } | null,
  *   globalSizeMenuOpen: boolean,
  *   openFolderMenu: string | null,
@@ -167,7 +167,7 @@ export const view = { scale: 1, x: 0, y: 0 };
 export const ui = {
   mode: 'pan',
   interactiveFile: null,
-  openSizeMenuFile: null,
+  openCardMenuFile: null,
   globalSize: null,
   globalSizeMenuOpen: false,
   openFolderMenu: null,

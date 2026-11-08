@@ -982,7 +982,10 @@ do iframe desfaria a escolha do usuário. O `localStorage` guarda `width`/`heigh
 posição, e os dois campos são opcionais: um registro gravado antes disso continua válido, e
 a tela sem eles volta a ser medida pelo conteúdo.
 
-O menu do título traz as dimensões de `PRESET_FRAME_SIZES` e um **Automático**, que larga o
+O botão `⋯` do título abre o menu de opções da tela: **Redimensionar**, um submenu que
+abre para o lado (no hover ou no clique; para a esquerda quando a direita sairia da janela),
+e **Recarregar** (veja "Recarregamento"). O submenu traz as dimensões de
+`PRESET_FRAME_SIZES` e um **Automático**, que larga o
 tamanho manual e remede. A altura volta ao padrão antes dessa medida, pelo mesmo motivo que
 a largura volta a `CARD_WIDTH`: o `scrollHeight` de uma página curta é a altura do próprio
 frame, então medir sem zerar apenas confirmaria o tamanho que o usuário quer descartar. O
@@ -1217,6 +1220,11 @@ mensagem e sai da fila.
 `reloadCard` guarda o `scrollY` interno do iframe antes de trocar o `src` e o restaura no
 `load` seguinte. Sem isso, uma edição no rodapé de uma página longa jogaria a tela de
 volta para o topo a cada salvamento.
+
+O **Recarregar** do menu da tela é o oposto, de propósito: o usuário quer a tela de volta
+ao estado inicial (formulário vazio, JS do zero), então o scroll volta ao topo. E ele não
+conta como evento do watcher — não entra na conta do `settle` nem acende o aviso na
+sidebar, porque nada mudou no disco.
 
 #### Última tela mexida
 

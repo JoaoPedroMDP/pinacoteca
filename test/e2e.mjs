@@ -444,16 +444,38 @@ check('tamanho invalido nao e salvo',
 
 await board.evaluate("document.querySelector('[data-action=\"rearrange\"]').click()");
 
-/* ---------- Menu de tamanho ---------- */
+/* ---------- Menu da tela ---------- */
 
-process.stdout.write('\nMenu de tamanho\n');
+process.stdout.write('\nMenu da tela\n');
 
-const openMenu = () => board.evaluate(
-  "document.querySelector('.card[data-file=\"solo.html\"] .card-resize-btn').click()");
+check('titulo mostra o nome legivel da tela e o caminho no hover', await board.evaluate(
+  `(() => { const label = document.querySelector('.card[data-file="solo.html"] .card-title-label');`
+  + ` return label.textContent === 'Solo' && label.title === 'solo.html'; })()`));
+
+// Abre o menu e o submenu Redimensionar (clique no gatilho, como quem nao tem hover).
+const openMenu = () => board.evaluate(`(() => {
+  const card = document.querySelector('.card[data-file="solo.html"]');
+  card.querySelector('.card-menu-btn').click();
+  card.querySelector('[data-action="resize"]').click();
+})()`);
 
 await openMenu();
-check('botao do titulo abre o menu de tamanho', (await board.evaluate(
+check('botao do titulo abre o menu da tela', (await board.evaluate(
   "document.querySelectorAll('.card.has-open-menu').length")) === 1);
+check('menu tem Redimensionar e Recarregar', await board.evaluate(
+  "Boolean(document.querySelector('.card[data-file=\"solo.html\"] .card-menu [data-action=\"resize\"]'))"
+  + " && Boolean(document.querySelector('.card[data-file=\"solo.html\"] .card-menu [data-action=\"reload\"]'))"));
+
+// O submenu abre ao lado do menu, nao embaixo dele — para a esquerda quando a
+// direita sairia da janela.
+const submenuBeside = await board.evaluate(`(() => {
+  const card = document.querySelector('.card[data-file="solo.html"]');
+  const menu = card.querySelector('.card-menu').getBoundingClientRect();
+  const sub = card.querySelector('.card-size-menu').getBoundingClientRect();
+  const beside = sub.left >= menu.right - 8 || sub.right <= menu.left + 8;
+  return sub.width > 0 && beside && sub.right <= document.documentElement.clientWidth;
+})()`);
+check('submenu Redimensionar abre para o lado, dentro da janela', submenuBeside === true);
 
 // O menu abre por cima do frame, que vem depois dele no DOM: quem esta no ponto
 // e a prova de que da para clicar nas opcoes, e nao no vidro da tela.
@@ -461,9 +483,10 @@ const menuOnTop = await board.evaluate(`(() => {
   const menu = document.querySelector('.card[data-file="solo.html"] .card-size-menu');
   const box = menu.getBoundingClientRect();
   const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-  return Boolean(hit?.closest('.card-size-menu'));
+  return hit?.closest('.card-size-menu') ? true
+    : JSON.stringify({ hit: hit?.className, box, w: innerWidth, h: innerHeight });
 })()`);
-check('menu aberto fica por cima do frame', menuOnTop === true);
+check('submenu aberto fica por cima do frame', menuOnTop === true, String(menuOnTop));
 
 await board.evaluate(
   "document.querySelector('.card[data-file=\"solo.html\"] .card-size-option[data-size=\"375x667\"]').click()");
@@ -484,6 +507,22 @@ await checkEventually('Automatico devolve a tela a medida do conteudo', async ()
 });
 check('tamanho automatico sai do localStorage',
   (await stored())?.['solo.html']?.width === undefined);
+
+// Recarregar descarta o que o usuario mexeu dentro da tela: marca o documento
+// atual e confere que o documento depois da recarga e outro, sem a marca.
+await board.evaluate(
+  "document.querySelector('.card[data-file=\"solo.html\"] iframe').contentDocument.body.dataset.mexido = '1'");
+await board.evaluate(`(() => {
+  const card = document.querySelector('.card[data-file="solo.html"]');
+  card.querySelector('.card-menu-btn').click();
+  card.querySelector('[data-action="reload"]').click();
+})()`);
+await checkEventually('Recarregar devolve a tela ao estado inicial', () => board.evaluate(`(() => {
+  const body = document.querySelector('.card[data-file="solo.html"] iframe').contentDocument?.body;
+  return Boolean(body?.querySelector('h1')) && body.dataset.mexido === undefined;
+})()`));
+check('Recarregar fecha o menu',
+  (await board.evaluate("document.querySelectorAll('.card.has-open-menu').length")) === 0);
 
 // O cursor e o unico aviso de que aquela faixa agarra: sem ele o usuario nao
 // descobre que a borda redimensiona.
@@ -1679,7 +1718,7 @@ check('o segundo preset global tambem vai para o localStorage',
   JSON.stringify(storedSecond));
 
 // O global e um atalho, nao uma trava: o menu de cada card continua valendo.
-await board.evaluate("document.querySelector('.card[data-file=\"solo.html\"] .card-resize-btn').click()");
+await board.evaluate("document.querySelector('.card[data-file=\"solo.html\"] .card-menu-btn').click()");
 await board.evaluate(
   "document.querySelector('.card[data-file=\"solo.html\"] .card-size-option[data-size=\"768x1024\"]').click()");
 

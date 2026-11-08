@@ -1383,7 +1383,7 @@ body {
   text-overflow: ellipsis;
 }
 
-.card-resize-btn {
+.card-menu-btn {
   flex: 0 0 auto;
   width: 20px;
   height: 20px;
@@ -1398,17 +1398,16 @@ body {
   cursor: pointer;
 }
 
-.card-resize-btn:hover,
-.card-resize-btn[aria-expanded="true"] {
+.card-menu-btn:hover,
+.card-menu-btn[aria-expanded="true"] {
   background: rgb(255 255 255 / 18%);
 }
 
-/* Menu de tamanho: mora dentro do titulo, que ja e contra-escalado — assim
+/* Menu de opcoes: mora dentro do titulo, que ja e contra-escalado — assim
    sai do mesmo tamanho na tela em qualquer zoom, sem calculo em px de tela. */
+.card-menu,
 .card-size-menu {
   position: absolute;
-  top: 100%;
-  right: 0;
   z-index: 5;
   display: none;
   min-width: 150px;
@@ -1419,9 +1418,43 @@ body {
   backdrop-filter: blur(6px);
 }
 
-.card.has-open-menu .card-size-menu {
+.card-menu {
+  top: 100%;
+  right: 0;
+}
+
+.card.has-open-menu .card-menu {
   display: flex;
   flex-direction: column;
+}
+
+/* Submenu abre para o lado, colado no item que o abriu. Sem folga entre os
+   dois: o hover passa do gatilho ao submenu sem cair no vazio e fechar. */
+.card-menu-entry {
+  position: relative;
+}
+
+.card-size-menu {
+  top: -5px;
+  left: 100%;
+}
+
+/* Sem espaco a direita da janela (veja `buildSizeEntry`): abre para a esquerda. */
+.card-menu-entry.opens-left > .card-size-menu {
+  right: 100%;
+  left: auto;
+}
+
+.card-menu-entry:hover > .card-size-menu,
+.card-menu-entry.is-open > .card-size-menu {
+  display: flex;
+  flex-direction: column;
+}
+
+.card-submenu-trigger::after {
+  content: '›';
+  float: right;
+  margin-left: 12px;
 }
 
 /* O card e `position: absolute` sem z-index: sem isto o menu aberto ficaria
@@ -1440,6 +1473,7 @@ body {
   z-index: 1;
 }
 
+.card-menu-option,
 .card-size-option {
   display: block;
   width: 100%;
@@ -1456,6 +1490,9 @@ body {
   cursor: pointer;
 }
 
+.card-menu-option:hover,
+.card-menu-entry:hover > .card-submenu-trigger,
+.card-menu-entry.is-open > .card-submenu-trigger,
 .card-size-option:hover {
   background: #262b33;
 }
@@ -1581,7 +1618,7 @@ body {
   display: flex;
 }
 
-/* Mesmo popover do menu de tamanho de um card (`.card-size-menu`), so que para
+/* Mesmo popover do menu de opcoes de um card (`.card-menu`), so que para
    cima: a toolbar mora colada na borda de baixo do viewport, e um menu descendo
    dali sairia da tela. */
 .global-size-menu {

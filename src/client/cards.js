@@ -158,7 +158,76 @@ function resizeToContent(screen) {
 }
 
 /**
- * Monta o titulo: o nome da tela, o botao de tamanho e o menu dele.
+ * Uma opcao clicavel de menu que fecha o menu da tela depois de agir.
+ * @param {string} className
+ * @param {string} text
+ * @param {() => void} action
+ * @returns {HTMLButtonElement}
+ */
+function menuButton(className, text, action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.textContent = text;
+  button.addEventListener('click', () => {
+    action();
+    closeCardMenu();
+  });
+  return button;
+}
+
+/**
+ * O submenu "Redimensionar": o Automatico e os presets. Abre para o lado, no
+ * hover ou no clique do gatilho (clique serve para quem nao tem hover).
+ * @param {string} file
+ * @returns {HTMLElement}
+ */
+function buildSizeEntry(file) {
+  const entry = document.createElement('div');
+  entry.className = 'card-menu-entry';
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'card-menu-option card-submenu-trigger';
+  trigger.dataset.action = 'resize';
+  trigger.textContent = 'Redimensionar';
+  const submenu = document.createElement('div');
+  submenu.className = 'card-size-menu';
+
+  // Abre para a direita; perto da borda da janela, onde sairia da tela, vira
+  // para a esquerda. Medido ja visivel: escondido, a caixa e zero.
+  const place = () => {
+    entry.classList.remove('opens-left');
+    if (submenu.getBoundingClientRect().right > document.documentElement.clientWidth) {
+      entry.classList.add('opens-left');
+    }
+  };
+  entry.addEventListener('mouseenter', place);
+  trigger.addEventListener('click', () => {
+    entry.classList.toggle('is-open');
+    place();
+  });
+
+  const auto = menuButton('card-size-option', 'Automatico', () => autoSizeCard(file));
+  auto.dataset.size = 'auto';
+  submenu.append(auto);
+
+  for (const preset of PRESET_FRAME_SIZES) {
+    const option = menuButton(
+      'card-size-option',
+      `${preset.label} ${preset.width}×${preset.height}`,
+      () => applyPresetSize(file, preset.width, preset.height),
+    );
+    option.dataset.size = `${preset.width}x${preset.height}`;
+    submenu.append(option);
+  }
+
+  entry.append(trigger, submenu);
+  return entry;
+}
+
+/**
+ * Monta o titulo: o nome da tela, o botao de opcoes e o menu dele.
  *
  * Fica dentro do titulo, e nao flutuando no viewport, porque o titulo ja e
  * contra-escalado por `1/scale` — assim o botao e o menu saem do tamanho certo
@@ -184,38 +253,19 @@ function buildTitle(file) {
 
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'card-resize-btn';
-  button.title = 'Redimensionar';
+  button.className = 'card-menu-btn';
+  button.title = 'Opcoes da tela';
   button.setAttribute('aria-expanded', 'false');
-  button.textContent = '⤡';
-  button.addEventListener('click', () => toggleSizeMenu(file));
+  button.textContent = '⋯';
+  button.addEventListener('click', () => toggleCardMenu(file));
 
   const menu = document.createElement('div');
-  menu.className = 'card-size-menu';
+  menu.className = 'card-menu';
 
-  const auto = document.createElement('button');
-  auto.type = 'button';
-  auto.className = 'card-size-option';
-  auto.dataset.size = 'auto';
-  auto.textContent = 'Automatico';
-  auto.addEventListener('click', () => {
-    autoSizeCard(file);
-    closeSizeMenu();
-  });
-  menu.append(auto);
+  const reload = menuButton('card-menu-option', 'Recarregar', () => reloadCard(file, { keepScroll: false }));
+  reload.dataset.action = 'reload';
 
-  for (const preset of PRESET_FRAME_SIZES) {
-    const option = document.createElement('button');
-    option.type = 'button';
-    option.className = 'card-size-option';
-    option.dataset.size = `${preset.width}x${preset.height}`;
-    option.textContent = `${preset.label} ${preset.width}×${preset.height}`;
-    option.addEventListener('click', () => {
-      applyPresetSize(file, preset.width, preset.height);
-      closeSizeMenu();
-    });
-    menu.append(option);
-  }
+  menu.append(buildSizeEntry(file), reload);
 
   title.append(dot, label, button, menu);
   return title;
@@ -394,7 +444,7 @@ export function removeCard(file) {
   if (!screen) return;
 
   if (ui.interactiveFile === file) ui.interactiveFile = null;
-  if (ui.openSizeMenuFile === file) ui.openSizeMenuFile = null;
+  if (ui.openCardMenuFile === file) ui.openCardMenuFile = null;
   ui.lastChangedFiles = ui.lastChangedFiles.filter((marked) => marked !== file);
   if (screen.lateScan) clearTimeout(screen.lateScan);
   screen.card.remove();
@@ -410,11 +460,23 @@ export function removeCard(file) {
  * edicao no rodape de uma pagina longa jogaria a tela de volta para o topo a
  * cada salvamento.
  *
+ * `keepScroll: false` e o "Recarregar" do menu da tela: o usuario quer a tela
+ * de volta ao estado inicial, entao o scroll volta ao topo, e a recarga nao
+ * conta como evento do watcher (nem para o `settle`, nem para o aviso na
+ * sidebar).
+ *
  * @param {string} file
+ * @param {{ keepScroll?: boolean }} [options]
  */
-export function reloadCard(file) {
+export function reloadCard(file, { keepScroll = true } = {}) {
   const screen = screens.get(file);
   if (!screen) return;
+
+  if (!keepScroll) {
+    screen.pendingScroll = 0;
+    screen.iframe.src = previewUrl(file);
+    return;
+  }
 
   try {
     screen.pendingScroll = screen.iframe.contentWindow?.scrollY ?? 0;
@@ -595,29 +657,30 @@ export function applyGlobalSize(preset) {
 }
 
 /**
- * Abre o menu de tamanho de uma tela, ou fecha o que ja estava aberto nela.
+ * Abre o menu de opcoes de uma tela, ou fecha o que ja estava aberto nela.
  * Um menu por vez, pelo mesmo motivo da tela interativa.
  * @param {string} file
  */
-export function toggleSizeMenu(file) {
-  const next = ui.openSizeMenuFile === file ? null : file;
-  closeSizeMenu();
+export function toggleCardMenu(file) {
+  const next = ui.openCardMenuFile === file ? null : file;
+  closeCardMenu();
   if (!next) return;
 
-  ui.openSizeMenuFile = next;
+  ui.openCardMenuFile = next;
   const screen = screens.get(next);
   screen?.card.classList.add('has-open-menu');
-  screen?.card.querySelector('.card-resize-btn')?.setAttribute('aria-expanded', 'true');
+  screen?.card.querySelector('.card-menu-btn')?.setAttribute('aria-expanded', 'true');
 }
 
-/** Fecha o menu de tamanho aberto, se houver algum. */
-export function closeSizeMenu() {
-  if (!ui.openSizeMenuFile) return;
+/** Fecha o menu de opcoes aberto, se houver algum, junto com o submenu dele. */
+export function closeCardMenu() {
+  if (!ui.openCardMenuFile) return;
 
-  const screen = screens.get(ui.openSizeMenuFile);
+  const screen = screens.get(ui.openCardMenuFile);
   screen?.card.classList.remove('has-open-menu');
-  screen?.card.querySelector('.card-resize-btn')?.setAttribute('aria-expanded', 'false');
-  ui.openSizeMenuFile = null;
+  screen?.card.querySelector('.card-menu-btn')?.setAttribute('aria-expanded', 'false');
+  screen?.card.querySelector('.card-menu-entry')?.classList.remove('is-open', 'opens-left');
+  ui.openCardMenuFile = null;
 }
 
 /**

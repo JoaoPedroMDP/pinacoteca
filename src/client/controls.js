@@ -11,7 +11,7 @@ import {
   panBy, persistPositions, recordMove, redo, resetPositions, resetZoom, resizeScreen,
   setFolderMenu, undo, zoomAt, zoomByStep,
 } from './view.js';
-import { applyGlobalSize, closeSizeMenu, resetSizes, setInteractive } from './cards.js';
+import { applyGlobalSize, closeCardMenu, resetSizes, setInteractive } from './cards.js';
 import {
   adjustInspectLevel, clearHoverHighlight, hasHoverTarget, openCommentBoxAt,
 } from './inspect.js';
@@ -121,14 +121,14 @@ function canvasPoint(event) {
 }
 
 /**
- * A alca de arrasto de uma tela e o titulo dela — menos o botao de tamanho e o
+ * A alca de arrasto de uma tela e o titulo dela — menos o botao de opcoes e o
  * menu dele, que sao para clicar, nao para arrastar.
  * @param {Event} event
  * @returns {string | null} o arquivo da tela, ou null se o gesto nasceu fora
  */
 function draggedFile(event) {
   const target = /** @type {Element | null} */ (event.target);
-  if (target?.closest?.('.card-resize-btn, .card-size-menu')) return null;
+  if (target?.closest?.('.card-menu-btn, .card-menu')) return null;
 
   const title = target?.closest?.('.card-title');
   return title?.parentElement?.dataset.file ?? null;
@@ -470,13 +470,13 @@ function endResize(event) {
 viewport.addEventListener('pointerup', endResize);
 viewport.addEventListener('pointercancel', endResize);
 
-// Clique no vazio sai do modo de interacao e fecha o menu de tamanho.
+// Clique no vazio sai do modo de interacao e fecha o menu de opcoes da tela.
 viewport.addEventListener('click', (event) => {
   if (ui.interactiveFile && !isInsideInteractiveCard(event)) setInteractive(null);
 
   const target = /** @type {Element | null} */ (event.target);
-  if (ui.openSizeMenuFile && !target?.closest?.('.card-resize-btn, .card-size-menu')) {
-    closeSizeMenu();
+  if (ui.openCardMenuFile && !target?.closest?.('.card-menu-btn, .card-menu')) {
+    closeCardMenu();
   }
   if (ui.openFolderMenu && !target?.closest?.('.folder-zone-menu-btn, .folder-zone-menu')) {
     setFolderMenu(null);
@@ -635,7 +635,7 @@ window.addEventListener('keydown', (event) => {
 
   if (event.key === 'Escape') {
     setInteractive(null);
-    closeSizeMenu();
+    closeCardMenu();
     setFolderMenu(null);
     return;
   }
@@ -689,7 +689,7 @@ export function bindFrameKeys(frameWindow) {
         if (holdMode('Alt', 'pointer')) event.preventDefault();
       } else if (event.key === 'Escape') {
         setInteractive(null);
-        closeSizeMenu();
+        closeCardMenu();
       }
     });
 
