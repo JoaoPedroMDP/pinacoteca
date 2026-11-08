@@ -637,6 +637,39 @@ const stolen = boxes.filter((box) => box.owner !== box.file);
 check('clique em cima do titulo pega a propria tela', stolen.length === 0,
   stolen.map((box) => `${box.file} -> ${box.owner}`).join(' | '));
 
+// Nivel de detalhe: abaixo de DETAIL_MIN_SCALE o titulo so aparece com o mouse
+// em cima do card. Acima dele, sempre.
+/** @param {number} scale */
+const setScale = (scale) => board.evaluate(`Promise.all([import('/app/state.js'), import('/app/view.js')])
+  .then(([s, v]) => {
+    // Mantem a tela a-mobile-1 no meio do viewport: o hover precisa dela visivel.
+    const card = document.querySelector('.card[data-file="a-mobile-1.html"]');
+    const rect = document.getElementById('viewport').getBoundingClientRect();
+    s.view.scale = ${scale};
+    s.view.x = rect.width / 2 - (card.offsetLeft + card.offsetWidth / 2) * ${scale};
+    s.view.y = rect.height / 2 - card.offsetTop * ${scale};
+    v.applyTransform();
+  })`);
+/** @type {() => Promise<number>} */
+const titleOpacity = () => board.evaluate(
+  "Number(getComputedStyle(document.querySelector('.card[data-file=\"a-mobile-1.html\"] .card-title')).opacity)");
+
+await board.hover(0, 0);
+await setScale(0.3);
+await checkEventually('zoom afastado esconde o titulo do card', async () => (await titleOpacity()) === 0);
+
+const mobileCenter = JSON.parse(await board.evaluate(`(() => {
+  const box = document.querySelector('.card[data-file="a-mobile-1.html"] .card-frame').getBoundingClientRect();
+  return JSON.stringify({ x: box.left + box.width / 2, y: box.top + Math.min(box.height / 2, 40) });
+})()`));
+await board.hover(mobileCenter.x, mobileCenter.y);
+await checkEventually('mouse em cima do card traz o titulo de volta', async () => (await titleOpacity()) === 1);
+
+await board.hover(0, 0);
+await setScale(0.5);
+await checkEventually('zoom normal mostra o titulo sem hover', async () => (await titleOpacity()) === 1);
+await board.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' }))");
+
 /* ---------- Silencio da pasta e medida tardia ---------- */
 
 // O `load` do iframe nao e o fim da historia: conteudo montado por JS chega

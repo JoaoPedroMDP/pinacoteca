@@ -126,6 +126,7 @@ export function createFixture() {
  *
  * @param {{ dir: string, port: number, cdpPort: number, chromeBinary: string }} options
  * @returns {Promise<{ evaluate: (expression: string) => Promise<any>,
+ *   hover: (x: number, y: number) => Promise<void>,
  *   reload: () => Promise<void>, stop: () => void }>}
  */
 export async function startBoard({ dir, port, cdpPort, chromeBinary }) {
@@ -168,18 +169,32 @@ export async function startBoard({ dir, port, cdpPort, chromeBinary }) {
    * @param {string} expression
    */
   async function evaluate(expression) {
-    const id = nextId++;
-    socket.send(JSON.stringify({
-      id,
-      method: 'Runtime.evaluate',
-      params: { expression, returnByValue: true, awaitPromise: true },
-    }));
-
-    const message = await new Promise((resolve) => pending.set(id, resolve));
+    const message = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (message.result?.exceptionDetails) {
       throw new Error(JSON.stringify(message.result.exceptionDetails));
     }
     return message.result.result.value;
+  }
+
+  /**
+   * Manda um comando CDP e espera a resposta.
+   * @param {string} method
+   * @param {object} params
+   */
+  async function send(method, params) {
+    const id = nextId++;
+    socket.send(JSON.stringify({ id, method, params }));
+    return new Promise((resolve) => pending.set(id, resolve));
+  }
+
+  /**
+   * Move o mouse de verdade ate (x, y) da janela. Evento sintetico em JS nao
+   * liga o `:hover` do CSS; so input do navegador liga.
+   * @param {number} x
+   * @param {number} y
+   */
+  async function hover(x, y) {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
   }
 
   /**
@@ -208,7 +223,7 @@ export async function startBoard({ dir, port, cdpPort, chromeBinary }) {
     }
   }
 
-  return { evaluate, reload, stop };
+  return { evaluate, hover, reload, stop };
 }
 
 /**

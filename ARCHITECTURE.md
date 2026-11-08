@@ -657,6 +657,16 @@ Duas regras seguram essa divisão:
   é a alça de arrasto, então isso arrastava a tela errada). Medida em `100% * scale`, a
   caixa contra-escalada volta a ter exatamente a largura do card desenhado, em qualquer
   zoom; o nome trunca com reticências quando o espaço aperta e o completo fica no `title`.
+
+  **Nível de detalhe.** Abaixo de `DETAIL_MIN_SCALE`, `applyTransform` liga
+  `#viewport.is-zoomed-out` e o título inteiro (bolinha da pasta, nome e botão do menu)
+  fica com `opacity: 0`: no zoom afastado os nomes, que não encolhem, se amontoam por cima
+  das telas. Esconder pela opacidade, e não por `display`/`visibility`, mantém a caixa no
+  layout e recebendo mouse — então passar o cursor sobre o card ou sobre a faixa do título
+  (que é filho do card) traz o título de volta pelo `:hover`, e arrastar pelo título
+  invisível continua funcionando. Menu aberto segura o título visível. Durante um arrasto
+  todos os títulos aparecem: a captura do ponteiro fica no viewport, que tira o `:hover` do
+  card sendo levado. O nome das pastas não entra nessa regra — são poucas por board.
 - **Cliente SSE** — assina `/events` e aplica os eventos no DOM.
 - **Map de assets** — `tela → recursos carregados`, lido de cada iframe a cada `load`.
   Um evento `asset` recarrega apenas as telas cujo conjunto contém aquele arquivo.

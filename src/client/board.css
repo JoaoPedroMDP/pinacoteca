@@ -1358,6 +1358,25 @@ body {
   cursor: grabbing;
 }
 
+/*
+ * Nivel de detalhe (DETAIL_MIN_SCALE): no zoom afastado o titulo some, mas so na
+ * opacidade — a caixa continua la e recebendo mouse. Chegar no card ou na faixa
+ * do titulo (que e filho do card) traz ele de volta, e arrastar pelo titulo
+ * invisivel continua funcionando. Menu aberto segura o titulo visivel; durante
+ * um arrasto todos aparecem, porque a captura do ponteiro no viewport tira o
+ * `:hover` do card que esta sendo levado.
+ */
+#viewport.is-zoomed-out .card-title {
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+#viewport.is-zoomed-out .card:hover .card-title,
+#viewport.is-zoomed-out .card.has-open-menu .card-title,
+#viewport.is-zoomed-out.is-dragging .card-title {
+  opacity: 1;
+}
+
 /* O nome trunca; o `min-width: 0` e o que deixa um item flex encolher abaixo
    do proprio conteudo — sem ele o botao seria empurrado para fora do card. */
 /* Cor da pasta da tela (folders.js). Tela na raiz nao tem pasta nem bolinha. */

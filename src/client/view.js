@@ -19,7 +19,7 @@ import {
   setFolderColor, setGroupOrigin,
 } from './folders.js';
 import {
-  CARD_TITLE_HEIGHT, CENTER_PADDING, FIT_PADDING, FOLDER_REACH, FOLDER_ZONE_LABEL,
+  CARD_TITLE_HEIGHT, CENTER_PADDING, DETAIL_MIN_SCALE, FIT_PADDING, FOLDER_REACH, FOLDER_ZONE_LABEL,
   FOLDER_ZONE_PAD, GAP, GRID_SIZE,
   MAX_FRAME_HEIGHT, MAX_FRAME_WIDTH, MAX_SCALE,
   MIN_FRAME_HEIGHT, MIN_FRAME_WIDTH, MIN_SCALE,
@@ -33,6 +33,8 @@ export function applyTransform() {
   // O mesmo zoom, na mao do CSS: e com ele que o titulo limita a largura dele a
   // do card *na tela*, em vez de crescer junto com a contra-escala (veja board.css).
   canvas.style.setProperty('--scale', String(view.scale));
+  // Nivel de detalhe: no zoom afastado o board.css esconde os titulos dos cards.
+  viewport.classList.toggle('is-zoomed-out', view.scale < DETAIL_MIN_SCALE);
   // A coluna de comentarios e contra-escalada, entao o zoom move a ponta das
   // linhas que sai dela.
   scheduleCommentLinks();

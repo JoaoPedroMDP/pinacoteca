@@ -110,6 +110,12 @@ export const CENTER_PADDING = 48;
 export const MIN_SCALE = 0.05;
 export const MAX_SCALE = 2;
 
+/**
+ * Abaixo deste zoom o titulo de cada card (nome e menu) some e so volta com o
+ * mouse em cima do card: no zoom afastado os nomes se amontoam e tapam as telas.
+ */
+export const DETAIL_MIN_SCALE = 0.35;
+
 /** Quanto cada clique no `+`/`-` (e as teclas correspondentes) multiplica o zoom. */
 export const ZOOM_STEP = 1.2;
 
