@@ -2143,6 +2143,10 @@ check('tela na raiz nao ganha marcador de pasta', await board.evaluate(
   `!${cardOf('solo.html')}.dataset.folderPath`
   + ` && ${cardOf('solo.html')}.querySelector('.card-folder-dot').offsetWidth === 0`));
 
+check('titulo da tela em pasta mostra so o nome legivel, com o caminho no hover', await board.evaluate(
+  `(() => { const label = ${cardOf('grupo/sub/tres.html')}.querySelector('.card-title-label');`
+  + ` return label.textContent === 'Tres' && label.title === 'grupo/sub/tres.html'; })()`));
+
 const groupColor = await folderColorOf(cardOf('grupo/um.html'));
 const subColor = await folderColorOf(cardOf('grupo/sub/tres.html'));
 check('subpasta tem outro tom da cor da pasta', /^#[0-9a-f]{6}$/.test(groupColor)

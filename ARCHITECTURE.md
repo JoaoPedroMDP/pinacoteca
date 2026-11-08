@@ -646,7 +646,9 @@ Duas regras seguram essa divisão:
   conexão SSE à esquerda e a versão do pacote (lida do `package.json` e servida em
   `/api/screens`) à direita.
 - **Board** — plano com zoom e pan. Cada tela é um card com título e um `iframe` dentro.
-  O título é contra-escalado por `1/scale` (via a variável CSS `--inv-scale`, ajustada no
+  O título mostra um nome legível (`screenLabel`: sem pasta nem extensão, `_` vira espaço,
+  hífen grudado ganha espaço dos lados, só a primeira letra maiúscula); o caminho real
+  fica no hover. O título é contra-escalado por `1/scale` (via a variável CSS `--inv-scale`, ajustada no
   `applyTransform`, com `transform-origin` na base): fica sempre 16px reais na tela, legível
   em qualquer nível de zoom, ancorado logo acima do frame. A **largura** dele leva a
   correção inversa — `calc(100% * var(--scale))` —, porque a contra-escala multiplica a

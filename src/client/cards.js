@@ -7,7 +7,7 @@
 
 import { canvas } from './dom.js';
 import { screens, ui } from './state.js';
-import { clamp, previewUrl, resizeZoneAt } from './utils.js';
+import { clamp, previewUrl, resizeZoneAt, screenLabel } from './utils.js';
 import {
   applyPresetSize, centerOn, layout, persistPositions, resizeScreen, separateCollisions,
 } from './view.js';
@@ -177,9 +177,9 @@ function buildTitle(file) {
 
   const label = document.createElement('span');
   label.className = 'card-title-label';
-  label.textContent = file;
-  // No zoom afastado o rotulo trunca (veja `.card-title-label` em board.css); o
-  // nome inteiro continua alcancavel pelo hover.
+  label.textContent = screenLabel(file);
+  // O rotulo e o nome legivel e trunca no zoom afastado (veja
+  // `.card-title-label` em board.css); o caminho real fica no hover.
   label.title = file;
 
   const button = document.createElement('button');

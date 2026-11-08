@@ -35,7 +35,7 @@ import {
   clampSidebarWidth, normalizeQuestions, previewUrl, rectsOverlap, resizeZoneAt,
   resolveXPath, separateOverlaps, serializeCommentQueue, snapToGrid, sortNames,
   toolTarget, basenameOf, dirnameOf, folderColor, hexToHsl, hslToHex, relocatePath,
-  shelfWidth, subfolderShade, rectGap, connectedFrom,
+  shelfWidth, subfolderShade, rectGap, connectedFrom, screenLabel,
 } from '../src/client/utils.js';
 import { parseInline, parseMarkdown } from '../src/client/markdown.js';
 
@@ -1452,6 +1452,19 @@ test('dirnameOf e basenameOf separam pasta e nome', () => {
   assert.equal(dirnameOf('c.html'), '');
   assert.equal(basenameOf('a/b/c.html'), 'c.html');
   assert.equal(basenameOf('a'), 'a');
+});
+
+test('screenLabel tira pasta e extensao, troca _ por espaco e sobe so a primeira letra', () => {
+  assert.equal(screenLabel('admin/user_list.html'), 'User list');
+  assert.equal(screenLabel('checkout_step_2.html'), 'Checkout step 2');
+  assert.equal(screenLabel('a__b.html'), 'A b');
+  assert.equal(screenLabel('README'), 'README');
+});
+
+test('screenLabel abre espaco em volta do hifen grudado e preserva o ja espacado', () => {
+  assert.equal(screenLabel('login-mobile.html'), 'Login - mobile');
+  assert.equal(screenLabel('login - mobile.html'), 'Login - mobile');
+  assert.equal(screenLabel('login_-mobile.html'), 'Login - mobile');
 });
 
 test('buildTree usa a pasta efetiva e cria pastas vazias pedidas', () => {

@@ -312,6 +312,25 @@ export function basenameOf(path) {
 }
 
 /**
+ * Rotulo legivel de uma tela no board: o nome do arquivo sem pasta e sem
+ * extensao, `_` vira espaco, hifen grudado ganha espaco dos lados e so a
+ * primeira letra sobe. `admin/user_list.html` vira `User list`.
+ * @param {string} file
+ * @returns {string}
+ */
+export function screenLabel(file) {
+  const name = basenameOf(file);
+  const dot = name.lastIndexOf('.');
+  const label = (dot > 0 ? name.slice(0, dot) : name)
+    .replaceAll('_', ' ')
+    .replace(/(?<=\S)-/g, ' -')
+    .replace(/-(?=\S)/g, '- ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+/**
  * Monta uma arvore de pastas a partir das telas.
  *
  * A pasta de cada tela sai de `folderOf` — por padrao a pasta real, mas o board
